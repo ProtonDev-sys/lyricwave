@@ -13,6 +13,33 @@
 # testing
 /coverage
 
+# Python / local inference
+__pycache__/
+*.py[cod]
+/.venv/
+/.local-data/
+/.cache/
+/.huggingface/
+/hf-cache/
+/models/
+/checkpoints/
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.gguf
+
+# Local songs and generated stems
+*.aac
+*.flac
+*.m4a
+*.mp3
+*.ogg
+*.wav
+*.webm
+/separated/
+
 # next.js
 /.next/
 /.vinext/
@@ -29,6 +56,9 @@ yarn-error.log*
 .pnpm-debug.log*
 .codex-dev.log
 *.tsbuildinfo
+/.engine.log
+/.engine.err.log
+/.engine.out.log
 
 # env files (can opt-in for committing if needed)
 .env*
@@ -40,3 +70,4 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+/public/__local-test-*.ogg

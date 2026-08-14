@@ -22,7 +22,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: "lyricwave — Your song, word for word",
     description:
-      "Isolate vocals and create word-by-word timed live lyrics entirely on your device.",
+      "Isolate vocals and create word-by-word timed live lyrics with a private local GPU engine.",
     applicationName: "lyricwave",
     icons: {
       icon: "/favicon.png",
@@ -31,7 +31,7 @@ export async function generateMetadata(): Promise<Metadata> {
     openGraph: {
       type: "website",
       title: "lyricwave — Your song, word for word",
-      description: "Private, on-device vocal isolation and word-synced live lyrics.",
+      description: "Private, local-GPU vocal isolation and word-synced live lyrics.",
       url: origin,
       siteName: "lyricwave",
       images: [{ url: `${origin}/og.png`, width: 1536, height: 910, alt: "lyricwave live lyrics" }],
@@ -39,7 +39,7 @@ export async function generateMetadata(): Promise<Metadata> {
     twitter: {
       card: "summary_large_image",
       title: "lyricwave — Your song, word for word",
-      description: "Private, on-device vocal isolation and word-synced live lyrics.",
+      description: "Private, local-GPU vocal isolation and word-synced live lyrics.",
       images: [`${origin}/og.png`],
     },
   };

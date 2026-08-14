@@ -6,15 +6,16 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev",
+    "dev": "node scripts/dev-local.mjs",
+    "dev:site": "vinext dev",
+    "dev:engine": ".venv\\Scripts\\python.exe -m uvicorn backend.server:app --host 127.0.0.1 --port 8008",
+    "setup:engine": "powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs && .venv\\Scripts\\python.exe -m unittest backend.test_server",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .venv --ignore-pattern .local-data"
   },
   "dependencies": {
-    "@browserai/browserai": "^2.1.1",
-    "@huggingface/transformers": "^4.2.0",
     "lucide-react": "^1.31.0",
     "react": "19.2.6",
     "react-dom": "19.2.6"

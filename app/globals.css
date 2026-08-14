@@ -1,16 +1,16 @@
 :root {
-  --night: #100a14;
-  --night-soft: #18101e;
-  --panel: rgba(31, 20, 37, 0.76);
-  --panel-strong: rgba(38, 24, 44, 0.9);
-  --cream: #fff8f0;
-  --muted: rgba(255, 248, 240, 0.5);
-  --muted-soft: rgba(255, 248, 240, 0.28);
-  --line: rgba(255, 255, 255, 0.1);
+  --night: #0d0911;
+  --night-soft: #17101c;
+  --panel: rgba(27, 18, 33, 0.78);
+  --panel-strong: rgba(34, 22, 40, 0.92);
+  --cream: #fffaf5;
+  --muted: rgba(255, 250, 245, 0.62);
+  --muted-soft: rgba(255, 250, 245, 0.4);
+  --line: rgba(255, 255, 255, 0.085);
   --coral: #ff7458;
   --pink: #ff4f9f;
   --lime: #c9ff80;
-  --shadow: 0 22px 70px rgba(0, 0, 0, 0.34);
+  --shadow: 0 18px 54px rgba(0, 0, 0, 0.3);
 }
 
 * {
@@ -26,7 +26,8 @@ body {
 
 body {
   color: var(--cream);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans, "Segoe UI Variable"), "Segoe UI", Arial, Helvetica, sans-serif;
+  line-height: 1.4;
   overflow: hidden;
 }
 
@@ -52,12 +53,12 @@ select:focus-visible {
   isolation: isolate;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 15px;
+  gap: 14px;
   width: 100%;
   height: 100dvh;
   min-height: 650px;
-  padding: 19px 23px 18px;
-  overflow: hidden;
+  padding: 18px 22px 17px;
+  overflow: clip;
   background:
     radial-gradient(circle at 78% -12%, rgba(255, 79, 159, 0.14), transparent 32%),
     radial-gradient(circle at 18% 115%, rgba(255, 116, 88, 0.1), transparent 36%),
@@ -70,8 +71,8 @@ select:focus-visible {
   width: 36vw;
   height: 36vw;
   border-radius: 999px;
-  opacity: 0.4;
-  filter: blur(90px);
+  opacity: 0.27;
+  filter: blur(110px);
   pointer-events: none;
   animation: float-glow 14s ease-in-out infinite alternate;
 }
@@ -93,7 +94,7 @@ select:focus-visible {
   position: absolute;
   z-index: -1;
   inset: 0;
-  opacity: 0.16;
+  opacity: 0.075;
   pointer-events: none;
   background-image:
     repeating-radial-gradient(circle at 17% 31%, rgba(255, 255, 255, 0.16) 0 0.55px, transparent 0.8px 4px),
@@ -117,7 +118,7 @@ select:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 38px;
+  min-height: 40px;
 }
 
 .brand {
@@ -127,9 +128,9 @@ select:focus-visible {
   padding: 0;
   border: 0;
   background: transparent;
-  font-size: 18px;
-  font-weight: 760;
-  letter-spacing: -0.045em;
+  font-size: 19px;
+  font-weight: 720;
+  letter-spacing: -0.035em;
   cursor: pointer;
 }
 
@@ -161,14 +162,14 @@ select:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  height: 34px;
+  height: 36px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.045);
   color: rgba(255, 248, 240, 0.76);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  font-size: 11.5px;
+  font-weight: 620;
+  letter-spacing: 0.01em;
   cursor: pointer;
   backdrop-filter: blur(16px);
   transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
@@ -179,7 +180,7 @@ select:focus-visible {
 }
 
 .header-icon {
-  width: 34px;
+  width: 36px;
   padding: 0;
 }
 
@@ -188,6 +189,20 @@ select:focus-visible {
   border-color: rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.08);
   color: var(--cream);
+}
+
+.privacy-pill.engine-online {
+  border-color: rgba(201, 255, 128, 0.24);
+  color: rgba(221, 255, 177, 0.88);
+}
+
+.privacy-pill.engine-checking {
+  color: rgba(255, 248, 240, 0.56);
+}
+
+.privacy-pill.engine-offline {
+  border-color: rgba(255, 116, 88, 0.28);
+  color: rgba(255, 154, 132, 0.92);
 }
 
 .privacy-popover {
@@ -217,8 +232,8 @@ select:focus-visible {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(290px, 350px) minmax(0, 1fr);
-  gap: 15px;
+  grid-template-columns: minmax(286px, 320px) minmax(0, 1fr);
+  gap: 14px;
   min-height: 0;
 }
 
@@ -232,12 +247,12 @@ select:focus-visible {
 
 .song-panel {
   min-height: 0;
-  padding: clamp(22px, 2vw, 30px);
+  padding: clamp(21px, 1.7vw, 26px);
   overflow: auto;
-  border-radius: 24px;
+  border-radius: 22px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012)),
-    rgba(27, 17, 32, 0.72);
+    linear-gradient(145deg, rgba(255, 255, 255, 0.038), rgba(255, 255, 255, 0.008)),
+    rgba(25, 16, 30, 0.76);
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
 }
@@ -247,16 +262,16 @@ select:focus-visible {
 }
 
 .eyebrow {
-  color: rgba(255, 248, 240, 0.45);
-  font-size: 9px;
-  font-weight: 760;
-  letter-spacing: 0.18em;
+  color: rgba(255, 250, 245, 0.5);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
 }
 
 .intro-copy h1,
 .track-heading h1 {
   margin: 10px 0 10px;
-  letter-spacing: -0.055em;
+  letter-spacing: -0.045em;
 }
 
 .intro-copy h1 {
@@ -346,6 +361,14 @@ select:focus-visible {
   background: rgba(255, 255, 255, 0.025);
 }
 
+.language-control.mode-control {
+  margin-top: 8px;
+}
+
+.mode-control select {
+  max-width: 175px;
+}
+
 .language-control > span {
   color: var(--muted);
   font-size: 10px;
@@ -371,27 +394,27 @@ select:focus-visible {
 .model-note {
   margin: 13px 4px 0;
   color: var(--muted-soft);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
 }
 
 .track-card {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  align-items: end;
-  gap: 18px;
-  margin-bottom: 22px;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 17px;
 }
 
 .track-art {
   position: relative;
   display: grid;
   place-items: center;
-  width: 92px;
+  width: 76px;
   aspect-ratio: 1;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 19px;
+  border-radius: 17px;
   background:
     radial-gradient(circle at 72% 28%, rgba(255, 120, 91, 0.75), transparent 28%),
     radial-gradient(circle at 28% 76%, rgba(255, 79, 159, 0.62), transparent 34%),
@@ -402,8 +425,8 @@ select:focus-visible {
 
 .track-art-orbit {
   position: absolute;
-  width: 72px;
-  height: 72px;
+  width: 60px;
+  height: 60px;
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 50%;
   animation: spin-orbit 9s linear infinite;
@@ -433,30 +456,35 @@ select:focus-visible {
 
 .track-heading h1 {
   overflow: hidden;
-  font-size: clamp(22px, 2vw, 29px);
-  line-height: 1;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  margin-top: 7px;
+  margin-bottom: 6px;
+  font-size: clamp(19px, 1.5vw, 23px);
+  font-weight: 720;
+  line-height: 1.03;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .track-heading p {
   margin: 0 0 5px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .file-meta {
   color: var(--muted-soft);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .pipeline-card {
-  padding: 17px;
+  padding: 16px;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.026);
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.022);
 }
 
 .pipeline-topline {
@@ -464,13 +492,13 @@ select:focus-visible {
   align-items: center;
   justify-content: space-between;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
 }
 
 .pipeline-topline strong {
   color: var(--cream);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .progress-track {
@@ -495,7 +523,7 @@ select:focus-visible {
   margin: 0 0 14px;
   overflow: hidden;
   color: rgba(255, 248, 240, 0.72);
-  font-size: 10px;
+  font-size: 10.5px;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -554,13 +582,53 @@ select:focus-visible {
 }
 
 .process-step strong {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
 }
 
 .process-step small {
   color: var(--muted-soft);
-  font-size: 8px;
+  font-size: 9px;
+}
+
+.completion-summary {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 10px;
+  border: 1px solid rgba(201, 255, 128, 0.12);
+  border-radius: 13px;
+  background: rgba(201, 255, 128, 0.055);
+}
+
+.completion-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: rgba(201, 255, 128, 0.1);
+  color: var(--lime);
+}
+
+.completion-summary > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.completion-summary strong {
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.completion-summary small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .spin {
@@ -573,14 +641,19 @@ select:focus-visible {
   }
 }
 
-.fallback-note {
+.fallback-note,
+.engine-detail {
   margin: 13px 0 0;
+  color: var(--muted-soft);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+
+.fallback-note {
   padding: 10px;
   border-radius: 10px;
   background: rgba(255, 188, 95, 0.08);
   color: rgba(255, 221, 173, 0.72);
-  font-size: 9px;
-  line-height: 1.45;
 }
 
 .error-card {
@@ -609,7 +682,7 @@ select:focus-visible {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.045);
   color: rgba(255, 248, 240, 0.72);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 650;
   cursor: pointer;
   transition: background 150ms ease, color 150ms ease;
@@ -649,13 +722,15 @@ select:focus-visible {
 
 .lyrics-stage {
   position: relative;
+  isolation: isolate;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
-  border-radius: 24px;
+  overflow: clip;
+  border-radius: 22px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 40%),
-    rgba(20, 12, 24, 0.5);
+    radial-gradient(circle at 30% 52%, rgba(255, 93, 155, 0.045), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 38%),
+    rgba(17, 11, 21, 0.58);
 }
 
 .lyrics-stage::before {
@@ -680,19 +755,38 @@ select:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 58px;
-  padding: 0 21px;
-  background: linear-gradient(180deg, rgba(14, 8, 18, 0.78), transparent);
+  height: 62px;
+  padding: 0 23px;
+  background: linear-gradient(180deg, rgba(13, 8, 17, 0.88), rgba(13, 8, 17, 0.3) 72%, transparent);
 }
 
 .lyrics-toolbar > div {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: rgba(255, 248, 240, 0.38);
-  font-size: 9px;
-  font-weight: 760;
-  letter-spacing: 0.15em;
+  color: rgba(255, 250, 245, 0.48);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+.lyrics-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(255, 250, 245, 0.3);
+  font-size: 9.5px;
+  font-weight: 560;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.lyrics-meta::before {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.24);
+  content: "";
 }
 
 .live-dot {
@@ -734,11 +828,17 @@ select:focus-visible {
 }
 
 .lyrics-scroll {
+  --lyrics-top-space: 240px;
+  --lyrics-bottom-space: 390px;
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: var(--lyrics-top-space) var(--lyrics-bottom-space);
   scrollbar-width: none;
-  mask-image: linear-gradient(180deg, transparent 2%, #000 15%, #000 85%, transparent 98%);
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 72px, #000 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 72px, #000 100%);
 }
 
 .lyrics-scroll::-webkit-scrollbar {
@@ -755,15 +855,15 @@ select:focus-visible {
 
 .holding-lyrics p {
   margin: 0;
-  color: rgba(255, 248, 240, 0.22);
-  font-size: clamp(44px, 5.6vw, 86px);
-  font-weight: 760;
-  line-height: 0.98;
-  letter-spacing: -0.065em;
+  color: rgba(255, 250, 245, 0.26);
+  font-size: clamp(43px, 5.2vw, 80px);
+  font-weight: 710;
+  line-height: 1;
+  letter-spacing: -0.052em;
 }
 
 .holding-lyrics p:first-child {
-  color: rgba(255, 248, 240, 0.78);
+  color: rgba(255, 250, 245, 0.82);
 }
 
 .holding-lyrics em {
@@ -774,8 +874,8 @@ select:focus-visible {
 
 .holding-lyrics span {
   margin-top: 27px;
-  color: rgba(255, 248, 240, 0.28);
-  font-size: 10px;
+  color: rgba(255, 250, 245, 0.4);
+  font-size: 11px;
 }
 
 .processing-lyrics em {
@@ -801,61 +901,138 @@ select:focus-visible {
   display: grid;
   align-content: start;
   min-height: 100%;
-  padding: 44vh clamp(35px, 5.5vw, 88px);
+  padding: var(--lyrics-top-space) clamp(42px, 5.8vw, 96px) var(--lyrics-bottom-space);
 }
 
 .lyric-line {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
+  align-items: baseline;
   gap: 0 0.24em;
   width: 100%;
-  margin: 0 0 0.48em;
+  margin: 0 0 0.34em;
+  padding: 0;
+  color: var(--cream);
+  font-size: clamp(36px, 3.85vw, 60px);
+  font-weight: 710;
+  line-height: 1.12;
+  letter-spacing: -0.046em;
+  text-align: left;
+  cursor: pointer;
+  opacity: 0.56;
+  transition: opacity 130ms ease-out;
+}
+
+.line-seek-target {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
-  font-size: clamp(34px, 4.35vw, 67px);
-  font-weight: 770;
-  line-height: 0.98;
-  letter-spacing: -0.058em;
-  text-align: left;
   cursor: pointer;
-  opacity: 0.23;
-  transform: scale(0.985);
-  transform-origin: left center;
-  transition: opacity 420ms ease, transform 520ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .lyric-line:hover {
-  opacity: 0.48;
+  opacity: 0.74;
 }
 
 .lyric-line.is-active {
   opacity: 1;
-  transform: scale(1.012);
 }
 
 .lyric-line.is-past {
-  opacity: 0.34;
+  opacity: 0.36;
+}
+
+.lyric-line.is-adlib {
+  width: min(82%, 920px);
+  margin-left: clamp(18px, 4vw, 62px);
+  font-size: clamp(23px, 2.35vw, 37px);
+  font-weight: 610;
+  line-height: 1.14;
+  letter-spacing: -0.03em;
+}
+
+.lyric-line.is-adlib.is-active {
+  opacity: 0.92;
 }
 
 .lyric-word {
+  --word-fill: 0%;
+  --word-rest: 0.52;
+  --word-rgb: 255, 250, 245;
+  position: relative;
+  z-index: 1;
   display: inline-block;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.12em;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  white-space: nowrap;
+  overflow: visible;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: filter 90ms ease-out;
+}
+
+.lyric-word-label {
+  display: inline-block;
+  /* background-clip:text only paints inside this box. Extra paint space keeps
+     descenders (g, j, p, q, y) and accents from becoming transparent, while
+     matching negative margins leave the lyric rhythm unchanged. */
+  margin-block: -0.06em -0.16em;
+  padding-block: 0.06em 0.16em;
+  overflow: visible;
   background: linear-gradient(
     90deg,
-    rgba(255, 248, 240, 0.96) 0%,
-    rgba(255, 248, 240, 0.96) var(--word-fill),
-    rgba(255, 248, 240, 0.24) var(--word-fill),
-    rgba(255, 248, 240, 0.24) 100%
+    rgba(var(--word-rgb), 0.98) 0%,
+    rgba(var(--word-rgb), 0.98) calc(var(--word-fill) - 1.5%),
+    rgba(var(--word-rgb), 0.82) var(--word-fill),
+    rgba(var(--word-rgb), var(--word-rest)) calc(var(--word-fill) + 2.5%),
+    rgba(var(--word-rgb), var(--word-rest)) 100%
   );
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  transition: transform 140ms ease, filter 180ms ease;
+}
+
+.lyric-line.is-active .lyric-word {
+  --word-rest: 0.34;
 }
 
 .lyric-word.is-active {
-  transform: translateY(-1px) scale(1.035);
-  filter: drop-shadow(0 0 14px rgba(255, 116, 88, 0.32));
+  --word-rest: 0.58;
+  filter: drop-shadow(0 0 12px rgba(255, 116, 88, 0.28));
+}
+
+.lyric-word:hover {
+  --word-rest: 0.7;
+  filter: drop-shadow(0 0 9px rgba(255, 250, 245, 0.16));
+}
+
+.lyric-word:focus-visible {
+  outline: 2px solid rgba(255, 116, 88, 0.88);
+  outline-offset: 4px;
+}
+
+.lyric-line.is-adlib .lyric-word {
+  --word-rgb: 255, 178, 205;
+  --word-rest: 0.44;
+}
+
+.lyric-line.is-adlib .lyric-word.is-active {
+  --word-rest: 0.58;
+  filter: drop-shadow(0 0 12px rgba(244, 92, 159, 0.34));
 }
 
 .lyrics-stage:fullscreen {
@@ -882,13 +1059,15 @@ select:focus-visible {
   position: relative;
   z-index: 20;
   display: grid;
-  grid-template-columns: minmax(190px, 285px) minmax(330px, 1fr) minmax(270px, 325px);
+  grid-template-columns: minmax(200px, 290px) minmax(340px, 1fr) minmax(260px, 305px);
   align-items: center;
   gap: clamp(16px, 2.5vw, 40px);
-  min-height: 76px;
-  padding: 10px 15px;
-  border-radius: 20px;
-  background: rgba(25, 16, 30, 0.83);
+  min-height: 86px;
+  padding: 11px 17px;
+  border-radius: 21px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 65%),
+    rgba(22, 14, 27, 0.9);
 }
 
 .player:not(.is-loaded) {
@@ -897,7 +1076,7 @@ select:focus-visible {
 
 .player-track {
   display: grid;
-  grid-template-columns: 43px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
   align-items: center;
   gap: 11px;
   min-width: 0;
@@ -906,9 +1085,9 @@ select:focus-visible {
 .mini-art {
   display: grid;
   place-items: center;
-  width: 43px;
-  height: 43px;
-  border-radius: 12px;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
   background: linear-gradient(145deg, rgba(255, 116, 88, 0.25), rgba(255, 79, 159, 0.14));
   color: #ff9a82;
 }
@@ -927,32 +1106,33 @@ select:focus-visible {
 }
 
 .player-track strong {
-  font-size: 11px;
+  font-size: 12.5px;
+  font-weight: 680;
 }
 
 .player-track span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10.5px;
 }
 
 .transport {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .transport-buttons {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .transport-buttons button,
 .volume-control button {
   display: grid;
   place-items: center;
-  width: 29px;
-  height: 29px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -973,8 +1153,8 @@ select:focus-visible {
 }
 
 .transport-buttons .play-button {
-  width: 35px;
-  height: 35px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: var(--cream);
   color: #1a101e;
@@ -989,15 +1169,15 @@ select:focus-visible {
 
 .timeline-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
   align-items: center;
   gap: 8px;
 }
 
 .timeline-row span {
   color: rgba(255, 248, 240, 0.36);
-  font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-family: var(--font-geist-mono, "Cascadia Mono"), "Cascadia Mono", Consolas, monospace;
+  font-size: 9px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1006,7 +1186,7 @@ select:focus-visible {
 }
 
 input[type="range"] {
-  height: 3px;
+  height: 4px;
   margin: 0;
   border-radius: 999px;
   appearance: none;
@@ -1025,8 +1205,8 @@ input[type="range"] {
 }
 
 input[type="range"]::-webkit-slider-thumb {
-  width: 9px;
-  height: 9px;
+  width: 11px;
+  height: 11px;
   border: 0;
   border-radius: 50%;
   appearance: none;
@@ -1041,8 +1221,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 input[type="range"]::-moz-range-thumb {
-  width: 9px;
-  height: 9px;
+  width: 11px;
+  height: 11px;
   border: 0;
   border-radius: 50%;
   background: var(--cream);
@@ -1070,13 +1250,13 @@ input[type="range"]::-moz-range-thumb {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 25px;
-  padding: 0 9px;
+  height: 29px;
+  padding: 0 10px;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: rgba(255, 248, 240, 0.4);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 680;
   cursor: pointer;
 }
@@ -1093,7 +1273,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .volume-control input {
-  width: 72px;
+  width: 82px;
   background: linear-gradient(
     90deg,
     rgba(255, 248, 240, 0.78) 0%,
@@ -1154,11 +1334,11 @@ input[type="range"]::-moz-range-thumb {
   }
 
   .workspace {
-    grid-template-columns: minmax(275px, 315px) minmax(0, 1fr);
+    grid-template-columns: minmax(275px, 300px) minmax(0, 1fr);
   }
 
   .player {
-    grid-template-columns: minmax(160px, 220px) minmax(280px, 1fr) minmax(210px, 245px);
+    grid-template-columns: minmax(160px, 220px) minmax(280px, 1fr) minmax(205px, 240px);
     gap: 16px;
   }
 
@@ -1173,7 +1353,12 @@ input[type="range"]::-moz-range-thumb {
 
 @media (max-width: 780px) {
   body {
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .ambient {
+    display: none;
   }
 
   .app-shell {
@@ -1197,12 +1382,21 @@ input[type="range"]::-moz-range-thumb {
     overflow: visible;
   }
 
+  .song-panel.has-file {
+    padding: 18px;
+  }
+
+  .song-panel.has-file .track-card {
+    margin-bottom: 13px;
+  }
+
   .intro-copy h1 {
     max-width: 460px;
   }
 
   .lyrics-stage {
-    min-height: 58dvh;
+    height: clamp(520px, 68dvh, 680px);
+    min-height: 0;
   }
 
   .holding-lyrics {
@@ -1220,7 +1414,8 @@ input[type="range"]::-moz-range-thumb {
   }
 
   .lyric-line {
-    font-size: clamp(32px, 9vw, 52px);
+    font-size: clamp(32px, 8.8vw, 50px);
+    line-height: 1.12;
   }
 
   .player {
@@ -1230,7 +1425,7 @@ input[type="range"]::-moz-range-thumb {
     left: 10px;
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
-    min-height: 83px;
+    min-height: 92px;
     padding: 10px 12px;
   }
 
@@ -1246,7 +1441,7 @@ input[type="range"]::-moz-range-thumb {
 
   .transport-buttons {
     position: absolute;
-    top: 12px;
+    top: 10px;
     right: 11px;
   }
 
@@ -1270,12 +1465,12 @@ input[type="range"]::-moz-range-thumb {
   }
 
   .mini-art {
-    width: 38px;
-    height: 38px;
+    width: 42px;
+    height: 42px;
   }
 
   .player-track {
-    grid-template-columns: 38px minmax(0, 1fr);
+    grid-template-columns: 42px minmax(0, 1fr);
   }
 
   .toast {
@@ -1296,18 +1491,18 @@ input[type="range"]::-moz-range-thumb {
   }
 
   .track-card {
-    grid-template-columns: 72px minmax(0, 1fr);
-    gap: 14px;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 12px;
   }
 
   .track-art {
-    width: 72px;
-    border-radius: 16px;
+    width: 64px;
+    border-radius: 15px;
   }
 
   .track-art-orbit {
-    width: 56px;
-    height: 56px;
+    width: 50px;
+    height: 50px;
   }
 
   .source-switch button:first-child {

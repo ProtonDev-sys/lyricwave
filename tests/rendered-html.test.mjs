@@ -27,16 +27,27 @@ test("server-renders the lyricwave workspace", async () => {
   const html = await response.text();
   assert.match(html, /<title>lyricwave — Your song, word for word<\/title>/i);
   assert.match(html, /Turn any song into live lyrics/);
-  assert.match(html, /100% on-device/);
+  assert.match(html, /Checking local engine/);
   assert.match(html, /Drop your song here/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
-test("keeps audio processing client-local", async () => {
+test("uses the localhost inference engine and word-level results", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /@browserai\/browserai\/demucs/);
-  assert.match(page, /whisper-base_timestamped/);
-  assert.match(page, /return_timestamps:\s*"word"/);
+  const backend = await readFile(new URL("../backend/server.py", import.meta.url), "utf8");
+  const inferenceWorker = await readFile(
+    new URL("../backend/inference_worker.py", import.meta.url),
+    "utf8",
+  );
+  assert.match(page, /http:\/\/127\.0\.0\.1:8008/);
+  assert.match(page, /FormData\(\)/);
   assert.match(page, /URL\.createObjectURL/);
-  assert.doesNotMatch(page, /fetch\(["'`]\/api|FormData\(\)/);
+  assert.match(backend, /htdemucs_ft/);
+  assert.match(backend, /whisper-large-v3/);
+  assert.match(backend, /return_timestamps=True/);
+  assert.doesNotMatch(backend, /return_timestamps="word"/);
+  assert.match(backend, /AutoModelForCTC/);
+  assert.match(backend, /backend\.inference_worker/);
+  assert.match(inferenceWorker, /set_per_process_memory_fraction\(0\.70/);
+  assert.doesNotMatch(page, /@browserai|onnxruntime-web|@huggingface\/transformers/);
 });

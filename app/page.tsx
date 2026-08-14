@@ -32,11 +32,10 @@ import {
   Waves,
   X,
 } from "lucide-react";
-import type { DemucsConfig } from "@browserai/browserai/demucs";
-
+import { wordFillAt } from "./lyric-timing.js";
 type ProcessingStage =
   | "idle"
-  | "decoding"
+  | "uploading"
   | "separating"
   | "transcribing"
   | "complete"
@@ -46,6 +45,14 @@ type TimedWord = {
   text: string;
   start: number;
   end: number;
+  timing?: Array<{
+    start: number;
+    end: number;
+    fill: number;
+    pause_before?: boolean;
+  }>;
+  kind?: "lead" | "adlib";
+  phrase?: number;
 };
 
 type LyricLine = {
@@ -53,31 +60,48 @@ type LyricLine = {
   start: number;
   end: number;
   words: TimedWord[];
+  kind?: "lead" | "adlib";
 };
 
-type WhisperChunk = {
-  text?: string;
-  timestamp?: [number | null, number | null];
+type BackendStage =
+  | "queued"
+  | "separating"
+  | "transcribing"
+  | "complete"
+  | "error"
+  | "cancelled";
+
+type BackendJob = {
+  id: string;
+  stage: BackendStage;
+  progress: number;
+  status: string;
+  error?: string;
+  duration: number;
+  device?: string;
+  vocal_url?: string | null;
+  words?: TimedWord[];
+  lines?: LyricLine[];
+  separation_model?: string;
+  transcription_model?: string;
 };
 
-type WhisperOutput = {
-  text?: string;
-  chunks?: WhisperChunk[];
-};
-
-type WhisperTranscriber = (
-  audio: Float32Array,
-  options: Record<string, unknown>,
-) => Promise<WhisperOutput>;
-
-type ProgressInfo = {
-  status?: string;
-  progress?: number;
-  file?: string;
+type BackendHealth = {
+  ok: boolean;
+  ready: boolean;
+  cuda: boolean;
+  device: string;
+  ffmpeg: boolean;
+  demucs: boolean;
+  transformers: boolean;
 };
 
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "flac", "m4a", "aac", "ogg", "webm"];
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const LYRIC_LOOKAHEAD_SECONDS = 0.055;
+const PLAYER_CLOCK_INTERVAL_MS = 80;
+const LOCAL_API_URL =
+  process.env.NEXT_PUBLIC_LYRICWAVE_API_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8008";
 
 const languageOptions = [
   { value: "auto", label: "Auto-detect" },
@@ -90,8 +114,6 @@ const languageOptions = [
   { value: "japanese", label: "Japanese" },
   { value: "korean", label: "Korean" },
 ];
-
-let whisperPromise: Promise<WhisperTranscriber> | null = null;
 
 function formatTime(value: number) {
   if (!Number.isFinite(value) || value < 0) return "0:00";
@@ -111,7 +133,7 @@ function parseTrackName(fileName: string) {
   const clean = fileName.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").trim();
   const pieces = clean.split(/\s+-\s+/);
   if (pieces.length > 1) {
-    return { artist: pieces[0], title: pieces.slice(1).join(" — ") };
+    return { title: pieces[0], artist: pieces.slice(1).join(" — ") };
   }
   return { artist: "Local audio", title: clean || "Untitled track" };
 }
@@ -121,168 +143,54 @@ function isAudioFile(file: File) {
   return file.type.startsWith("audio/") || ACCEPTED_EXTENSIONS.includes(extension);
 }
 
-function normalizeWords(chunks: WhisperChunk[]) {
-  const words: TimedWord[] = [];
-
-  for (const chunk of chunks) {
-    const text = chunk.text?.trim();
-    const start = chunk.timestamp?.[0];
-    const end = chunk.timestamp?.[1];
-    if (!text || start == null || end == null || end < start) continue;
-
-    const pieces = text.split(/\s+/).filter(Boolean);
-    const duration = Math.max(0.08, end - start);
-    pieces.forEach((piece, index) => {
-      const pieceStart = start + (duration * index) / pieces.length;
-      const pieceEnd = start + (duration * (index + 1)) / pieces.length;
-      words.push({ text: piece, start: pieceStart, end: pieceEnd });
-    });
-  }
-
-  return words;
-}
-
 function groupIntoLines(words: TimedWord[]): LyricLine[] {
   if (!words.length) return [];
-  const groups: TimedWord[][] = [];
-  let current: TimedWord[] = [];
+  const groups: Array<{ kind: "lead" | "adlib"; words: TimedWord[] }> = [];
 
-  for (const word of words) {
-    const previous = current[current.length - 1];
-    const gap = previous ? word.start - previous.end : 0;
-    const lineDuration = current.length ? word.end - current[0].start : 0;
-    const punctuationBreak = previous ? /[.!?…]$/.test(previous.text) && current.length >= 4 : false;
-    const shouldBreak =
-      current.length > 0 &&
-      (gap > 0.95 || current.length >= 9 || lineDuration > 6.5 || punctuationBreak);
+  for (const kind of ["lead", "adlib"] as const) {
+    const stream = words
+      .filter((word) => (word.kind ?? "lead") === kind)
+      .sort((left, right) => left.start - right.start);
+    let current: TimedWord[] = [];
+    const maxWords = kind === "adlib" ? 7 : 12;
+    const maxDuration = kind === "adlib" ? 5.2 : 7.2;
+    const maximumGap = kind === "adlib" ? 0.9 : 0.52;
 
-    if (shouldBreak) {
-      groups.push(current);
-      current = [];
+    for (const word of stream) {
+      const previous = current[current.length - 1];
+      const gap = previous ? word.start - previous.end : 0;
+      const lineDuration = current.length ? word.end - current[0].start : 0;
+      const phraseChanged = previous && word.phrase !== previous.phrase;
+      const punctuationBreak = previous
+        ? /[.!?…]$/.test(previous.text) && current.length >= 3
+        : false;
+      const phraseBreak =
+        phraseChanged && (gap > 0.06 || current.length >= 4 || lineDuration >= 2.5);
+      const shouldBreak =
+        current.length > 0 &&
+        (gap > maximumGap ||
+          current.length >= maxWords ||
+          lineDuration > maxDuration ||
+          punctuationBreak ||
+          phraseBreak);
+
+      if (shouldBreak) {
+        groups.push({ kind, words: current });
+        current = [];
+      }
+      current.push(word);
     }
-    current.push(word);
+    if (current.length) groups.push({ kind, words: current });
   }
-  if (current.length) groups.push(current);
+  groups.sort((left, right) => left.words[0].start - right.words[0].start);
 
-  return groups.map((lineWords, index) => ({
+  return groups.map(({ kind, words: lineWords }, index) => ({
     id: `line-${index}-${lineWords[0].start.toFixed(2)}`,
     start: lineWords[0].start,
     end: lineWords[lineWords.length - 1].end,
     words: lineWords,
+    kind,
   }));
-}
-
-async function voiceFocusFallback(buffer: AudioBuffer) {
-  const sampleRate = buffer.sampleRate;
-  const mono = new OfflineAudioContext(1, buffer.length, sampleRate);
-  const monoBuffer = mono.createBuffer(1, buffer.length, sampleRate);
-  const output = monoBuffer.getChannelData(0);
-  const left = buffer.getChannelData(0);
-  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
-
-  for (let index = 0; index < output.length; index += 1) {
-    output[index] = (left[index] + right[index]) * 0.5;
-  }
-
-  const source = mono.createBufferSource();
-  const highPass = mono.createBiquadFilter();
-  const lowPass = mono.createBiquadFilter();
-  const compressor = mono.createDynamicsCompressor();
-  source.buffer = monoBuffer;
-  highPass.type = "highpass";
-  highPass.frequency.value = 110;
-  lowPass.type = "lowpass";
-  lowPass.frequency.value = 9200;
-  compressor.threshold.value = -28;
-  compressor.knee.value = 18;
-  compressor.ratio.value = 4;
-  compressor.attack.value = 0.01;
-  compressor.release.value = 0.2;
-  source.connect(highPass).connect(lowPass).connect(compressor).connect(mono.destination);
-  source.start();
-  return mono.startRendering();
-}
-
-async function resampleToWhisper(buffer: AudioBuffer) {
-  const sampleRate = 16000;
-  const length = Math.ceil(buffer.duration * sampleRate);
-  const offline = new OfflineAudioContext(1, length, sampleRate);
-  const source = offline.createBufferSource();
-  source.buffer = buffer;
-  source.connect(offline.destination);
-  source.start();
-  const rendered = await offline.startRendering();
-  return rendered.getChannelData(0).slice();
-}
-
-function audioBufferToWav(buffer: AudioBuffer) {
-  const channels = Math.min(2, buffer.numberOfChannels);
-  const sampleRate = buffer.sampleRate;
-  const bytesPerSample = 2;
-  const frameCount = buffer.length;
-  const dataSize = frameCount * channels * bytesPerSample;
-  const arrayBuffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(arrayBuffer);
-
-  const writeString = (offset: number, value: string) => {
-    for (let index = 0; index < value.length; index += 1) {
-      view.setUint8(offset + index, value.charCodeAt(index));
-    }
-  };
-
-  writeString(0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, channels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * channels * bytesPerSample, true);
-  view.setUint16(32, channels * bytesPerSample, true);
-  view.setUint16(34, 16, true);
-  writeString(36, "data");
-  view.setUint32(40, dataSize, true);
-
-  const channelData = Array.from({ length: channels }, (_, index) =>
-    buffer.getChannelData(index),
-  );
-  let offset = 44;
-  for (let frame = 0; frame < frameCount; frame += 1) {
-    for (let channel = 0; channel < channels; channel += 1) {
-      const sample = Math.max(-1, Math.min(1, channelData[channel][frame]));
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      offset += bytesPerSample;
-    }
-  }
-
-  return new Blob([arrayBuffer], { type: "audio/wav" });
-}
-
-async function getWhisper(
-  supportsWebGPU: boolean,
-  onProgress: (info: ProgressInfo) => void,
-) {
-  if (!whisperPromise) {
-    whisperPromise = import("@huggingface/transformers")
-      .then(async ({ pipeline }) => {
-        const transcriber = await pipeline(
-          "automatic-speech-recognition",
-          "onnx-community/whisper-base_timestamped",
-          {
-            device: supportsWebGPU ? "webgpu" : "wasm",
-            dtype: supportsWebGPU ? "fp16" : "q8",
-            progress_callback: onProgress,
-          },
-        );
-        return transcriber as unknown as WhisperTranscriber;
-      })
-      .catch((error) => {
-        whisperPromise = null;
-        throw error;
-      });
-  }
-  return whisperPromise;
 }
 
 function downloadBlob(blob: Blob, fileName: string) {
@@ -296,14 +204,70 @@ function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function apiMessage(payload: unknown, fallback: string) {
+  if (payload && typeof payload === "object" && "detail" in payload) {
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail === "string") return detail;
+  }
+  return fallback;
+}
+
+function uploadToLocalEngine(
+  file: File,
+  language: string,
+  quality: "accurate" | "fast",
+  onProgress: (percent: number) => void,
+  register: (request: XMLHttpRequest) => void,
+) {
+  return new Promise<BackendJob>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    register(request);
+    request.open("POST", `${LOCAL_API_URL}/api/jobs`);
+    request.timeout = 60_000;
+    request.responseType = "json";
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress((event.loaded / event.total) * 5);
+    };
+    request.onerror = () => reject(new Error("Could not reach the local engine at 127.0.0.1:8008."));
+    request.ontimeout = () => reject(new Error("The local engine did not answer within 60 seconds."));
+    request.onabort = () => reject(new DOMException("Upload stopped", "AbortError"));
+    request.onload = () => {
+      const payload = request.response as unknown;
+      if (request.status >= 200 && request.status < 300) {
+        resolve(payload as BackendJob);
+        return;
+      }
+      reject(new Error(apiMessage(payload, `The local engine returned ${request.status}.`)));
+    };
+    const form = new FormData();
+    form.append("file", file, file.name);
+    form.append("language", language);
+    form.append("quality", quality);
+    request.send(form);
+  });
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
 export default function Home() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const lyricsRef = useRef<HTMLElement>(null);
-  const lineRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const lyricsScrollRef = useRef<HTMLDivElement>(null);
+  const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const wordRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const directScrollLineRef = useRef<number | null>(null);
   const objectUrlsRef = useRef<string[]>([]);
   const runIdRef = useRef(0);
   const fileRef = useRef<File | null>(null);
+  const activeJobRef = useRef<string | null>(null);
+  const uploadRequestRef = useRef<XMLHttpRequest | null>(null);
+  const activeWordIndexesRef = useRef<number[]>([]);
+  const lastLyricTimeRef = useRef(0);
+  const focusedLineIndexRef = useRef(-1);
+  const activeLineSignatureRef = useRef("");
 
   const [file, setFile] = useState<File | null>(null);
   const [track, setTrack] = useState({ title: "No song loaded", artist: "Choose local audio" });
@@ -318,55 +282,278 @@ export default function Home() {
   const [volume, setVolume] = useState(0.82);
   const [isMuted, setIsMuted] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [language, setLanguage] = useState("auto");
+  const [language, setLanguage] = useState("english");
+  const [quality, setQuality] = useState<"accurate" | "fast">("fast");
   const [originalUrl, setOriginalUrl] = useState("");
   const [vocalUrl, setVocalUrl] = useState("");
   const [playbackMode, setPlaybackMode] = useState<"mix" | "vocals">("mix");
-  const [usedFallback, setUsedFallback] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [engineState, setEngineState] = useState<"checking" | "online" | "offline">(
+    "checking",
+  );
+  const [engineHealth, setEngineHealth] = useState<BackendHealth | null>(null);
+  const [engineDetail, setEngineDetail] = useState("");
+  const [activeLineIndexes, setActiveLineIndexes] = useState<number[]>([]);
+  const [focusedLineIndex, setFocusedLineIndex] = useState(-1);
 
-  const supportsWebGPU = useMemo(
-    () => typeof navigator !== "undefined" && "gpu" in navigator,
-    [],
+  const lineWordOffsets = useMemo(() => {
+    return lines.map((_, lineIndex) =>
+      lines
+        .slice(0, lineIndex)
+        .reduce((offset, line) => offset + line.words.length, 0),
+    );
+  }, [lines]);
+
+  const wordTimeline = useMemo(
+    () =>
+      lines.flatMap((line, lineIndex) =>
+        line.words.map((word, wordIndex) => ({
+          ...word,
+          lineIndex,
+          refIndex: lineWordOffsets[lineIndex] + wordIndex,
+        })),
+      ).sort((left, right) => left.start - right.start || left.end - right.end),
+    [lineWordOffsets, lines],
   );
 
-  const activeLineIndex = useMemo(() => {
-    if (!lines.length) return -1;
-    const exact = lines.findIndex(
-      (line) => currentTime >= line.start - 0.12 && currentTime <= line.end + 0.45,
-    );
-    if (exact >= 0) return exact;
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      if (currentTime >= lines[index].start) return index;
-    }
-    return 0;
-  }, [currentTime, lines]);
+  const syncLyricsAt = useCallback(
+    (audioTime: number, force = false) => {
+      const displayTime = Math.max(0, audioTime + LYRIC_LOOKAHEAD_SECONDS);
+      let low = 0;
+      let high = wordTimeline.length - 1;
+      let candidate = -1;
+      while (low <= high) {
+        const middle = (low + high) >> 1;
+        if (wordTimeline[middle].start <= displayTime) {
+          candidate = middle;
+          low = middle + 1;
+        } else {
+          high = middle - 1;
+        }
+      }
+      const nextActive = wordTimeline
+        .map((word, index) =>
+          word.start <= displayTime && displayTime < word.end ? index : -1,
+        )
+        .filter((index) => index >= 0);
+      const previousActive = activeWordIndexesRef.current;
+
+      const resetWord = (index: number) => {
+        const word = wordTimeline[index];
+        const element = word ? wordRefs.current[word.refIndex] : null;
+        if (!element || !word) return;
+        element.classList.remove("is-active");
+        const past = displayTime >= word.end;
+        element.classList.toggle("is-past", past);
+        element.style.setProperty("--word-fill", past ? "100%" : "0%");
+      };
+
+      if (force || Math.abs(displayTime - lastLyricTimeRef.current) > 0.5) {
+        wordTimeline.forEach((_, index) => resetWord(index));
+      } else {
+        previousActive
+          .filter((index) => !nextActive.includes(index))
+          .forEach((index) => resetWord(index));
+      }
+
+      nextActive.forEach((index) => {
+        const word = wordTimeline[index];
+        const element = word ? wordRefs.current[word.refIndex] : null;
+        if (element && word) {
+          const progress = wordFillAt(word, displayTime);
+          element.classList.add("is-active");
+          element.classList.remove("is-past");
+          element.style.setProperty("--word-fill", `${progress * 100}%`);
+        }
+      });
+      if (!nextActive.length && candidate >= 0) {
+        resetWord(candidate);
+      }
+      activeWordIndexesRef.current = nextActive;
+      lastLyricTimeRef.current = displayTime;
+
+      const liveLines = lines
+        .map((line, index) =>
+          displayTime >= line.start - 0.03 && displayTime <= line.end + 0.24 ? index : -1,
+        )
+        .filter((index) => index >= 0);
+      const signature = liveLines.join(",");
+      if (signature !== activeLineSignatureRef.current) {
+        activeLineSignatureRef.current = signature;
+        setActiveLineIndexes(liveLines);
+      }
+
+      const focusedWordIndex =
+        nextActive.find((index) => (wordTimeline[index].kind ?? "lead") === "lead") ??
+        nextActive[0];
+      let nextFocused =
+        focusedWordIndex === undefined ? -1 : wordTimeline[focusedWordIndex].lineIndex;
+      if (nextFocused < 0 && liveLines.length) {
+        nextFocused =
+          liveLines.find((index) => (lines[index].kind ?? "lead") === "lead") ?? liveLines[0];
+      }
+      if (nextFocused < 0) {
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          if (displayTime >= lines[index].start) {
+            nextFocused = index;
+            break;
+          }
+        }
+      }
+      if (nextFocused !== focusedLineIndexRef.current) {
+        focusedLineIndexRef.current = nextFocused;
+        setFocusedLineIndex(nextFocused);
+      }
+    },
+    [lines, wordTimeline],
+  );
 
   const clearObjectUrls = useCallback(() => {
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrlsRef.current = [];
   }, []);
 
-  useEffect(() => clearObjectUrls, [clearObjectUrls]);
+  // Blob URLs are released when a song is replaced or the player is reset.
+  // Revoking them from an unmount cleanup breaks playback during Vite Fast
+  // Refresh because React preserves the File state while remounting effects.
+  useEffect(() => {
+    fileRef.current = file;
+    if (!file || !originalUrl || objectUrlsRef.current.includes(originalUrl)) return;
+
+    const replacementUrl = URL.createObjectURL(file);
+    objectUrlsRef.current.push(replacementUrl);
+    setOriginalUrl(replacementUrl);
+    if (audioRef.current && playbackMode === "mix") {
+      audioRef.current.src = replacementUrl;
+      audioRef.current.load();
+    }
+  }, [file, originalUrl, playbackMode]);
+
+  const checkEngine = useCallback(async () => {
+    setEngineState("checking");
+    try {
+      const response = await fetch(`${LOCAL_API_URL}/api/health`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) throw new Error(`Local engine returned ${response.status}`);
+      const health = (await response.json()) as BackendHealth;
+      setEngineHealth(health);
+      setEngineState(health.ready ? "online" : "offline");
+      return health.ready;
+    } catch {
+      setEngineHealth(null);
+      setEngineState("offline");
+      return false;
+    }
+  }, []);
 
   useEffect(() => {
-    if (!isPlaying) return;
-    let frame = 0;
-    const update = () => {
-      if (audioRef.current) setCurrentTime(audioRef.current.currentTime);
-      frame = window.requestAnimationFrame(update);
+    const checkTimer = window.setTimeout(() => void checkEngine(), 0);
+    return () => window.clearTimeout(checkTimer);
+  }, [checkEngine]);
+
+  const cancelCurrentJob = useCallback(() => {
+    uploadRequestRef.current?.abort();
+    uploadRequestRef.current = null;
+    const jobId = activeJobRef.current;
+    activeJobRef.current = null;
+    if (jobId) {
+      void fetch(`${LOCAL_API_URL}/api/jobs/${jobId}`, {
+        method: "DELETE",
+        keepalive: true,
+      }).catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => cancelCurrentJob, [cancelCurrentJob]);
+
+  useEffect(() => {
+    if (!isPlaying) {
+      syncLyricsAt(audioRef.current?.currentTime ?? 0, true);
+      return;
+    }
+    let lastPlayerClockUpdate = 0;
+    let animationFrame = 0;
+    const update = (frameTime: number) => {
+      const audioTime = audioRef.current?.currentTime ?? 0;
+      syncLyricsAt(audioTime);
+      if (frameTime - lastPlayerClockUpdate >= PLAYER_CLOCK_INTERVAL_MS) {
+        setCurrentTime(audioTime);
+        lastPlayerClockUpdate = frameTime;
+      }
+      animationFrame = window.requestAnimationFrame(update);
     };
-    frame = window.requestAnimationFrame(update);
-    return () => window.cancelAnimationFrame(frame);
-  }, [isPlaying]);
+    animationFrame = window.requestAnimationFrame(update);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [isPlaying, syncLyricsAt]);
 
   useEffect(() => {
-    if (activeLineIndex < 0 || !isPlaying) return;
-    lineRefs.current[activeLineIndex]?.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
+    const container = lyricsScrollRef.current;
+    if (!container) return;
+    const updateSafeSpace = () => {
+      const height = container.clientHeight;
+      container.style.setProperty("--lyrics-top-space", `${Math.max(150, height * 0.38)}px`);
+      container.style.setProperty(
+        "--lyrics-bottom-space",
+        `${Math.max(210, height * 0.62)}px`,
+      );
+    };
+    updateSafeSpace();
+    const observer = new ResizeObserver(updateSafeSpace);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const scrollToFocusedLine = useCallback((lineIndex: number) => {
+    const container = lyricsScrollRef.current;
+    const line = lineRefs.current[lineIndex];
+    if (!container || !line) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const lineRect = line.getBoundingClientRect();
+    const lineCenter =
+      container.scrollTop + lineRect.top - containerRect.top + lineRect.height / 2;
+    const readingRail = Math.max(104, container.clientHeight * 0.38);
+    const maximumScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+    const targetScroll = Math.max(0, Math.min(maximumScroll, lineCenter - readingRail));
+    const startScroll = container.scrollTop;
+    const distance = targetScroll - startScroll;
+    if (Math.abs(distance) < 1) return;
+    container.scrollTo({
+      top: targetScroll,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
     });
-  }, [activeLineIndex, isPlaying]);
+  }, []);
+
+  useEffect(() => {
+    if (focusedLineIndex < 0) return;
+    if (directScrollLineRef.current === focusedLineIndex) {
+      directScrollLineRef.current = null;
+      return;
+    }
+    directScrollLineRef.current = null;
+    scrollToFocusedLine(focusedLineIndex);
+  }, [focusedLineIndex, scrollToFocusedLine]);
+
+  useEffect(() => {
+    const container = lyricsScrollRef.current;
+    if (!container) return;
+    const stopTrackingAnimation = () => {
+      container.scrollTo({ top: container.scrollTop, behavior: "auto" });
+    };
+    container.addEventListener("wheel", stopTrackingAnimation, { passive: true });
+    container.addEventListener("touchstart", stopTrackingAnimation, { passive: true });
+    container.addEventListener("pointerdown", stopTrackingAnimation, { passive: true });
+    return () => {
+      stopTrackingAnimation();
+      container.removeEventListener("wheel", stopTrackingAnimation);
+      container.removeEventListener("touchstart", stopTrackingAnimation);
+      container.removeEventListener("pointerdown", stopTrackingAnimation);
+    };
+  }, []);
 
   const togglePlayback = useCallback(async () => {
     const audio = audioRef.current;
@@ -374,6 +561,7 @@ export default function Home() {
     if (audio.paused) {
       try {
         await audio.play();
+        setError("");
       } catch {
         setError("Playback was blocked by the browser. Press play once more.");
       }
@@ -388,7 +576,8 @@ export default function Home() {
     const nextTime = Math.max(0, Math.min(time, audio.duration || 0));
     audio.currentTime = nextTime;
     setCurrentTime(nextTime);
-  }, []);
+    syncLyricsAt(nextTime, true);
+  }, [syncLyricsAt]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -408,120 +597,87 @@ export default function Home() {
   const processTrack = useCallback(
     async (nextFile: File, runId: number) => {
       const stillCurrent = () => runIdRef.current === runId;
-      let vocalBuffer: AudioBuffer | null = null;
       setError("");
       setLines([]);
-      setUsedFallback(false);
-      setStage("decoding");
-      setStatus("Opening the local audio");
-      setProgress(4);
+      setEngineDetail("");
+      setStage("uploading");
+      setStatus("Sending the song to the local GPU engine");
+      setProgress(1);
 
       try {
-        const context = new AudioContext();
-        const bytes = await nextFile.arrayBuffer();
-        const decoded = await context.decodeAudioData(bytes);
-        await context.close();
-        if (!stillCurrent()) return;
-        setDuration(decoded.duration);
-        setProgress(10);
-
-        setStage("separating");
-        setStatus("Loading the vocal-isolation model");
-
-        try {
-          const { DemucsEngine, demucsModels } = await import(
-            "@browserai/browserai/demucs"
+        const engineReady = engineState === "online" || (await checkEngine());
+        if (!engineReady) {
+          throw new Error(
+            "The local engine is offline. Run `npm run setup:engine` once, then start the app with `npm run dev`.",
           );
-          const engine = new DemucsEngine();
-          await engine.loadModel(demucsModels.htdemucs as DemucsConfig, {
-            executionProviders: supportsWebGPU ? ["webgpu", "wasm"] : ["wasm"],
-            onProgress: (info: { progress?: number }) => {
-              if (!stillCurrent()) return;
-              const modelProgress = Math.max(0, Math.min(100, info.progress ?? 0));
-              setProgress(10 + modelProgress * 0.2);
-              setStatus(`Loading vocal isolation · ${Math.round(modelProgress)}%`);
-            },
+        }
+
+        const created = await uploadToLocalEngine(
+          nextFile,
+          language,
+          quality,
+          (uploadProgress) => {
+            if (stillCurrent()) setProgress(Math.max(1, uploadProgress));
+          },
+          (request) => {
+            uploadRequestRef.current = request;
+          },
+        );
+        uploadRequestRef.current = null;
+        if (!stillCurrent()) return;
+        activeJobRef.current = created.id;
+
+        while (stillCurrent()) {
+          const response = await fetch(`${LOCAL_API_URL}/api/jobs/${created.id}`, {
+            cache: "no-store",
+            signal: AbortSignal.timeout(10_000),
           });
-          if (!stillCurrent()) {
-            engine.dispose();
+          const payload = (await response.json()) as BackendJob | { detail?: string };
+          if (!response.ok) {
+            throw new Error(apiMessage(payload, `The local engine returned ${response.status}.`));
+          }
+          const job = payload as BackendJob;
+          if (!stillCurrent()) return;
+
+          setProgress(job.progress);
+          setStatus(job.status);
+          if (job.duration > 0) setDuration(job.duration);
+          if (job.device) {
+            setEngineDetail(
+              `${job.device} · ${job.separation_model ?? "Demucs"} · ${job.transcription_model ?? "Whisper"}`,
+            );
+          }
+          if (job.vocal_url) setVocalUrl(`${LOCAL_API_URL}${job.vocal_url}`);
+
+          if (job.stage === "queued") setStage("uploading");
+          if (job.stage === "separating") setStage("separating");
+          if (job.stage === "transcribing") setStage("transcribing");
+          if (job.stage === "error") {
+            throw new Error(job.error || "The local model stopped unexpectedly.");
+          }
+          if (job.stage === "cancelled") {
+            activeJobRef.current = null;
             return;
           }
-          setStatus("Separating the vocal stem");
-          const separated = await engine.separate(decoded, {
-            shifts: 1,
-            overlap: 0.25,
-            onProgress: ({ percent }: { percent: number }) => {
-              if (!stillCurrent()) return;
-              setProgress(30 + Math.max(0, Math.min(100, percent)) * 0.34);
-              setStatus(`Separating vocals · ${Math.round(percent)}%`);
-            },
-          });
-          vocalBuffer = separated.sources.vocals;
-          engine.dispose();
-        } catch (separationError) {
-          console.warn("Demucs unavailable; using voice-focus fallback", separationError);
-          if (!stillCurrent()) return;
-          setUsedFallback(true);
-          setStatus("Using a lighter vocal focus on this device");
-          vocalBuffer = await voiceFocusFallback(decoded);
+          if (job.stage === "complete") {
+            const timedWords = job.words ?? [];
+            const lyricLines = job.lines?.length ? job.lines : groupIntoLines(timedWords);
+            if (!lyricLines.length) {
+              throw new Error("Whisper did not return any timed lyric lines.");
+            }
+            setLines(lyricLines);
+            setProgress(100);
+            setStatus(`${timedWords.length} words synced locally`);
+            setStage("complete");
+            activeJobRef.current = null;
+            return;
+          }
+          await wait(650);
         }
-
-        if (!stillCurrent() || !vocalBuffer) return;
-        setProgress(66);
-        const vocalBlob = audioBufferToWav(vocalBuffer);
-        const nextVocalUrl = URL.createObjectURL(vocalBlob);
-        objectUrlsRef.current.push(nextVocalUrl);
-        setVocalUrl(nextVocalUrl);
-
-        setStage("transcribing");
-        setStatus("Preparing the vocal for Whisper");
-        const waveform = await resampleToWhisper(vocalBuffer);
-        if (!stillCurrent()) return;
-        setProgress(70);
-
-        const transcriber = await getWhisper(supportsWebGPU, (info) => {
-          if (!stillCurrent() || info.status !== "progress") return;
-          const modelProgress = Math.max(0, Math.min(100, info.progress ?? 0));
-          setProgress(70 + modelProgress * 0.14);
-          setStatus(`Loading Whisper · ${Math.round(modelProgress)}%`);
-        });
-
-        if (!stillCurrent()) return;
-        setStatus("Listening for every word and its timing");
-        setProgress(85);
-        const slowProgress = window.setInterval(() => {
-          if (!stillCurrent()) return;
-          setProgress((value) => Math.min(96, value + 0.25));
-        }, 1000);
-
-        let result: WhisperOutput;
-        try {
-          result = await transcriber(waveform, {
-            return_timestamps: "word",
-            chunk_length_s: 30,
-            stride_length_s: 5,
-            task: "transcribe",
-            ...(language === "auto" ? {} : { language }),
-          });
-        } finally {
-          window.clearInterval(slowProgress);
-        }
-
-        if (!stillCurrent()) return;
-        const timedWords = normalizeWords(result.chunks ?? []);
-        const lyricLines = groupIntoLines(timedWords);
-        if (!lyricLines.length) {
-          throw new Error(
-            "Whisper could not find clear sung words in this file. Try a track with a more present vocal.",
-          );
-        }
-
-        setLines(lyricLines);
-        setProgress(100);
-        setStatus(`${timedWords.length} words synced on this device`);
-        setStage("complete");
       } catch (processingError) {
         if (!stillCurrent()) return;
+        if (processingError instanceof DOMException && processingError.name === "AbortError") return;
+        cancelCurrentJob();
         console.error(processingError);
         const message =
           processingError instanceof Error
@@ -532,7 +688,7 @@ export default function Home() {
         setStage("error");
       }
     },
-    [language, supportsWebGPU],
+    [cancelCurrentJob, checkEngine, engineState, language, quality],
   );
 
   const loadFile = useCallback(
@@ -542,10 +698,11 @@ export default function Home() {
         return;
       }
       if (nextFile.size > MAX_FILE_SIZE) {
-        setError("That file is over 500 MB. Choose a smaller audio file for browser processing.");
+        setError("That file is over 500 MB. Choose a smaller audio file for local processing.");
         return;
       }
 
+      cancelCurrentJob();
       runIdRef.current += 1;
       const runId = runIdRef.current;
       audioRef.current?.pause();
@@ -562,6 +719,13 @@ export default function Home() {
       setCurrentTime(0);
       setDuration(0);
       setIsPlaying(false);
+      activeWordIndexesRef.current = [];
+      lastLyricTimeRef.current = 0;
+      focusedLineIndexRef.current = -1;
+      activeLineSignatureRef.current = "";
+      wordRefs.current = [];
+      setActiveLineIndexes([]);
+      setFocusedLineIndex(-1);
       setError("");
 
       if (audioRef.current) {
@@ -570,7 +734,7 @@ export default function Home() {
       }
       void processTrack(nextFile, runId);
     },
-    [clearObjectUrls, processTrack],
+    [cancelCurrentJob, clearObjectUrls, processTrack],
   );
 
   const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
@@ -588,11 +752,13 @@ export default function Home() {
 
   const retry = () => {
     if (!fileRef.current) return;
+    cancelCurrentJob();
     runIdRef.current += 1;
     void processTrack(fileRef.current, runIdRef.current);
   };
 
   const reset = () => {
+    cancelCurrentJob();
     runIdRef.current += 1;
     audioRef.current?.pause();
     if (audioRef.current) {
@@ -612,7 +778,15 @@ export default function Home() {
     setCurrentTime(0);
     setDuration(0);
     setIsPlaying(false);
+    activeWordIndexesRef.current = [];
+    lastLyricTimeRef.current = 0;
+    focusedLineIndexRef.current = -1;
+    activeLineSignatureRef.current = "";
+    wordRefs.current = [];
+    setActiveLineIndexes([]);
+    setFocusedLineIndex(-1);
     setPlaybackMode("mix");
+    setEngineDetail("");
     setError("");
   };
 
@@ -630,6 +804,7 @@ export default function Home() {
       () => {
         audio.currentTime = Math.min(time, audio.duration || time);
         setCurrentTime(audio.currentTime);
+        syncLyricsAt(audio.currentTime, true);
         if (shouldResume) void audio.play();
       },
       { once: true },
@@ -693,14 +868,24 @@ export default function Home() {
     downloadBlob(new Blob([lrc], { type: "text/plain" }), `${safeTitle || "lyrics"}.lrc`);
   };
 
-  const stageRank = { idle: 0, decoding: 1, separating: 2, transcribing: 3, complete: 4, error: -1 }[
+  const stageRank = { idle: 0, uploading: 1, separating: 2, transcribing: 3, complete: 4, error: -1 }[
     stage
   ];
 
   const steps = [
-    { label: "Open the mix", detail: "Decode locally", rank: 1, icon: FileAudio },
-    { label: "Find the vocal", detail: "HTDemucs separation", rank: 2, icon: Mic2 },
-    { label: "Sync every word", detail: "Whisper timestamps", rank: 3, icon: AudioLines },
+    { label: "Open the mix", detail: "Localhost handoff", rank: 1, icon: FileAudio },
+    {
+      label: "Find the vocal",
+      detail: quality === "accurate" ? "HTDemucs fine-tuned" : "HTDemucs fast pass",
+      rank: 2,
+      icon: Mic2,
+    },
+    {
+      label: "Sync every word",
+      detail: quality === "accurate" ? "Whisper large-v3" : "Whisper large-v3 turbo",
+      rank: 3,
+      icon: AudioLines,
+    },
   ];
 
   const renderVolumeIcon = () => {
@@ -726,18 +911,25 @@ export default function Home() {
         </button>
         <div className="header-actions">
           <button
-            className="privacy-pill"
+            className={`privacy-pill engine-${engineState}`}
             type="button"
             onClick={() => setShowPrivacy((visible) => !visible)}
             aria-expanded={showPrivacy}
           >
             <LockKeyhole size={13} />
-            100% on-device
+            {engineState === "online"
+              ? "Local GPU ready"
+              : engineState === "checking"
+                ? "Checking local engine"
+                : "Local engine offline"}
           </button>
           {showPrivacy && (
             <div className="privacy-popover" role="status">
               <strong>Your song stays here.</strong>
-              <span>Only the AI model files are downloaded. Your audio never leaves this browser.</span>
+              <span>
+                The interface sends audio only to 127.0.0.1 on this PC. Demucs and Whisper run on
+                {engineHealth?.device ? ` ${engineHealth.device}` : " your local hardware"}.
+              </span>
             </div>
           )}
           {file && (
@@ -794,8 +986,23 @@ export default function Home() {
                 </select>
               </label>
 
+              <label className="language-control mode-control">
+                <span>Processing</span>
+                <select
+                  value={quality}
+                  onChange={(event) => setQuality(event.target.value as "accurate" | "fast")}
+                >
+                  <option value="fast">Fast · turbo</option>
+                  <option value="accurate">Accurate · large-v3</option>
+                </select>
+              </label>
+
               <p className="model-note">
-                First run downloads about 430 MB of AI models. They are reused by your browser.
+                {engineState === "offline"
+                  ? "Local engine offline. Run npm run setup:engine once, then npm run dev."
+                  : quality === "fast"
+                    ? "Recommended for testing. Accurate mode adds a slower separation and transcription pass."
+                    : "Accurate mode uses the RTX GPU and caches several GB of model files after its first run."}
               </p>
             </>
           ) : (
@@ -825,38 +1032,51 @@ export default function Home() {
                 </div>
                 <p className="status-copy">{status}</p>
 
-                <div className="steps-list">
-                  {steps.map((step) => {
-                    const StepIcon = step.icon;
-                    const complete = stageRank > step.rank || stage === "complete";
-                    const active = stageRank === step.rank;
-                    return (
-                      <div
-                        key={step.label}
-                        className={`process-step ${complete ? "is-complete" : ""} ${active ? "is-active" : ""}`}
-                      >
-                        <span className="step-icon">
-                          {complete ? (
-                            <Check size={14} strokeWidth={2.5} />
-                          ) : active ? (
-                            <LoaderCircle className="spin" size={15} />
-                          ) : (
-                            <StepIcon size={15} />
-                          )}
-                        </span>
-                        <span>
-                          <strong>{step.label}</strong>
-                          <small>{step.detail}</small>
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+                {stage === "complete" ? (
+                  <div className="completion-summary">
+                    <span className="completion-icon">
+                      <Check size={15} strokeWidth={2.6} />
+                    </span>
+                    <span>
+                      <strong>Playback ready</strong>
+                      <small>
+                        {wordTimeline.length} words · {lines.length} lines · synced on this PC
+                      </small>
+                    </span>
+                  </div>
+                ) : (
+                  <div className="steps-list">
+                    {steps.map((step) => {
+                      const StepIcon = step.icon;
+                      const complete = stageRank > step.rank;
+                      const active = stageRank === step.rank;
+                      return (
+                        <div
+                          key={step.label}
+                          className={`process-step ${complete ? "is-complete" : ""} ${active ? "is-active" : ""}`}
+                        >
+                          <span className="step-icon">
+                            {complete ? (
+                              <Check size={14} strokeWidth={2.5} />
+                            ) : active ? (
+                              <LoaderCircle className="spin" size={15} />
+                            ) : (
+                              <StepIcon size={15} />
+                            )}
+                          </span>
+                          <span>
+                            <strong>{step.label}</strong>
+                            <small>{step.detail}</small>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
-                {usedFallback && (
-                  <p className="fallback-note">
-                    Full stem separation was not available, so this run used a lighter vocal-focus
-                    filter.
+                {engineDetail && (
+                  <p className="engine-detail">
+                    {engineDetail}
                   </p>
                 )}
                 {stage === "error" && (
@@ -889,49 +1109,81 @@ export default function Home() {
 
         <section className="lyrics-stage" ref={lyricsRef} aria-label="Live lyrics">
           <div className="lyrics-toolbar">
-            <div>
+            <div className="lyrics-status">
               <span className={`live-dot ${isPlaying ? "is-live" : ""}`} />
               <span>{stage === "complete" ? "LIVE LYRICS" : "LYRICS ROOM"}</span>
+              {stage === "complete" && (
+                <span className="lyrics-meta">
+                  {wordTimeline.length} words · {lines.length} lines
+                </span>
+              )}
             </div>
             <button type="button" onClick={requestFullscreen} aria-label="Toggle fullscreen lyrics">
               <Maximize2 size={15} />
             </button>
           </div>
 
-          <div className={`lyrics-scroll ${stage === "complete" ? "has-lyrics" : ""}`}>
+          <div
+            className={`lyrics-scroll ${stage === "complete" ? "has-lyrics" : ""}`}
+            ref={lyricsScrollRef}
+          >
             {stage === "complete" ? (
               <div className="lyrics-lines">
                 {lines.map((line, lineIndex) => (
-                  <button
-                    className={`lyric-line ${lineIndex === activeLineIndex ? "is-active" : ""} ${lineIndex < activeLineIndex ? "is-past" : ""}`}
+                  <div
+                    className={`lyric-line ${(line.kind ?? "lead") === "adlib" ? "is-adlib" : ""} ${activeLineIndexes.includes(lineIndex) ? "is-active" : ""} ${currentTime + LYRIC_LOOKAHEAD_SECONDS > line.end && !activeLineIndexes.includes(lineIndex) ? "is-past" : ""}`}
                     key={line.id}
-                    type="button"
                     ref={(element) => {
                       lineRefs.current[lineIndex] = element;
                     }}
-                    onClick={() => seekTo(line.start)}
-                    aria-label={`Seek to ${formatTime(line.start)}: ${line.words.map((word) => word.text).join(" ")}`}
                   >
+                    <button
+                      className="line-seek-target"
+                      type="button"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={(event) => {
+                        if (event.detail > 0) event.currentTarget.blur();
+                        directScrollLineRef.current = lineIndex;
+                        seekTo(line.start);
+                        scrollToFocusedLine(lineIndex);
+                      }}
+                      aria-label={`Seek to line at ${formatTime(line.start)}: ${line.words.map((word) => word.text).join(" ")}`}
+                    />
                     {line.words.map((word, wordIndex) => {
-                      const wordDuration = Math.max(0.05, word.end - word.start);
-                      const fill = Math.max(
-                        0,
-                        Math.min(1, (currentTime - word.start) / wordDuration),
-                      );
-                      const wordActive = currentTime >= word.start && currentTime < word.end;
-                      const wordPast = currentTime >= word.end;
                       return (
-                        <span
+                        <button
                           key={`${word.start}-${wordIndex}`}
-                          className={`lyric-word ${wordActive ? "is-active" : ""} ${wordPast ? "is-past" : ""}`}
-                          style={{ "--word-fill": `${fill * 100}%` } as CSSProperties}
+                          type="button"
+                          className="lyric-word"
+                          ref={(element) => {
+                            wordRefs.current[lineWordOffsets[lineIndex] + wordIndex] = element;
+                          }}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (event.detail > 0) event.currentTarget.blur();
+                            directScrollLineRef.current = lineIndex;
+                            seekTo(word.start);
+                            scrollToFocusedLine(lineIndex);
+                          }}
+                          aria-label={`Seek to “${word.text}” at ${formatTime(word.start)}`}
+                          title={`Jump to ${formatTime(word.start)}`}
+                          data-timing={word.timing?.length ? "acoustic" : "linear"}
                         >
-                          {word.text}
-                        </span>
+                          <span className="lyric-word-label">{word.text}</span>
+                        </button>
                       );
                     })}
-                  </button>
+                  </div>
                 ))}
+              </div>
+            ) : stage === "uploading" ? (
+              <div className="holding-lyrics processing-lyrics">
+                <p>Passing the song</p>
+                <p>
+                  to the <em>GPU.</em>
+                </p>
+                <span>The player is already usable while the local engine starts.</span>
               </div>
             ) : stage === "separating" ? (
               <div className="holding-lyrics processing-lyrics">
@@ -939,7 +1191,7 @@ export default function Home() {
                 <p>
                   out of the <em>mix.</em>
                 </p>
-                <span>Keep this tab open while your device listens.</span>
+                <span>Fine-tuned Demucs is separating the vocal on this PC.</span>
               </div>
             ) : stage === "transcribing" ? (
               <div className="holding-lyrics processing-lyrics">
@@ -947,7 +1199,7 @@ export default function Home() {
                 <p>
                   every <em>word.</em>
                 </p>
-                <span>The first pass takes a little longer; the next one is faster.</span>
+                <span>Whisper is adding an exact timestamp to each recognized word.</span>
               </div>
             ) : stage === "error" ? (
               <div className="holding-lyrics error-lyrics">
@@ -964,7 +1216,7 @@ export default function Home() {
                   We’ll find the <em>voice</em>
                 </p>
                 <p>and light up every word.</p>
-                <span>Click any finished line to seek straight to it.</span>
+                <span>Click any finished word to jump to its exact timestamp.</span>
               </div>
             )}
           </div>
@@ -1058,6 +1310,8 @@ export default function Home() {
         accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.webm"
         onChange={handleFileInput}
       />
+      {/* Live, word-timed lyrics are rendered in the adjacent lyrics panel. */}
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <audio
         ref={audioRef}
         preload="metadata"
@@ -1069,7 +1323,10 @@ export default function Home() {
         onPause={() => setIsPlaying(false)}
         onEnded={() => setIsPlaying(false)}
         onTimeUpdate={(event) => {
-          if (!isPlaying) setCurrentTime(event.currentTarget.currentTime);
+          if (!isPlaying) {
+            setCurrentTime(event.currentTarget.currentTime);
+            syncLyricsAt(event.currentTarget.currentTime, true);
+          }
         }}
       />
 
