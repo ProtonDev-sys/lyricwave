@@ -28,6 +28,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend.config import (
     ALLOWED_EXTENSIONS,
+    DEFAULT_QUALITY,
     cpu_thread_count,
     JOB_ROOT,
     MAX_DURATION_SECONDS,
@@ -38,6 +39,7 @@ from backend.config import (
     demucs_pass_count,
     normalise_language,
     normalise_quality,
+    public_model_profiles,
 )
 from backend.ctc_alignment import release_alignment_model
 from backend.inference_regions import _adaptive_vocal_regions
@@ -275,6 +277,8 @@ def health() -> dict[str, Any]:
         "pending_jobs": JOB_LIFECYCLE.busy_count(),
         "queue_capacity": max_pending_jobs(),
         "request_token": REQUEST_TOKEN,
+        "default_quality": DEFAULT_QUALITY,
+        "model_profiles": public_model_profiles(),
         **_runtime_info(),
     }
 
@@ -283,7 +287,7 @@ def health() -> dict[str, Any]:
 async def create_job(
     file: UploadFile = File(...),
     language: str = Form("auto"),
-    quality: str = Form("fast"),
+    quality: str = Form(DEFAULT_QUALITY),
 ) -> dict[str, Any]:
     try:
         runtime = await run_in_threadpool(_runtime_info)

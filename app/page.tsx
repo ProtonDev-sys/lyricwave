@@ -44,8 +44,9 @@ import {
   LocalEngineRequestError,
   withRefreshedRequestToken,
 } from "./local-engine.js";
-import { buildTimingExport } from "./lyric-export.js";
 import { wordFillAt } from "./lyric-timing.js";
+type QualityPreset = "fast" | "balanced" | "accurate";
+
 type ProcessingStage =
   | "idle"
   | "uploading"
@@ -95,24 +96,19 @@ type BackendJob = {
   vocal_url?: string | null;
   words?: TimedWord[];
   lines?: LyricLine[];
-  quality?: "accurate" | "fast";
-  language?: string;
-  created_at?: string;
   separation_model?: string;
   transcription_model?: string;
-  transcription_model_id?: string;
-  alignment_model_requested?: string;
+  alignment_model?: string;
 };
 
-type ProcessingMetadata = {
-  jobId: string;
-  createdAt: string | null;
-  quality: "accurate" | "fast";
-  languageSetting: string;
-  device: string | null;
-  separationModel: string | null;
-  transcriptionModel: string | null;
-  alignmentModelRequested: string | null;
+type BackendModelProfile = {
+  id: QualityPreset;
+  label: string;
+  description: string;
+  demucs_model: string;
+  transcription_model: string;
+  alignment_model: string;
+  side_pass: boolean;
 };
 
 type BackendHealth = {
@@ -127,6 +123,8 @@ type BackendHealth = {
   request_token: string;
   pending_jobs?: number;
   queue_capacity?: number;
+  default_quality?: QualityPreset;
+  model_profiles?: BackendModelProfile[];
 };
 
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "flac", "m4a", "aac", "ogg", "webm"];
@@ -139,6 +137,36 @@ const LOCAL_API_URL =
 const LOCAL_REQUEST_TOKEN_HEADER = "X-Lyricwave-Token";
 const ENGINE_OFFLINE_MESSAGE =
   "The local engine is offline. Run `npm run setup:engine` once, then start the app with `npm run dev`.";
+
+const FALLBACK_MODEL_PROFILES: BackendModelProfile[] = [
+  {
+    id: "fast",
+    label: "Fast",
+    description: "Lowest VRAM · Whisper large-v3-turbo · English word alignment",
+    demucs_model: "htdemucs",
+    transcription_model: "whisper-large-v3-turbo",
+    alignment_model: "wav2vec2-base-960h",
+    side_pass: false,
+  },
+  {
+    id: "balanced",
+    label: "Recommended",
+    description: "Qwen3-ASR 0.6B · multilingual word alignment · standard separation",
+    demucs_model: "htdemucs",
+    transcription_model: "Qwen3-ASR-0.6B-hf",
+    alignment_model: "Qwen3-ForcedAligner-0.6B-hf",
+    side_pass: false,
+  },
+  {
+    id: "accurate",
+    label: "Best quality",
+    description: "Qwen3-ASR 1.7B · fine-tuned separation · background-vocal pass",
+    demucs_model: "htdemucs_ft",
+    transcription_model: "Qwen3-ASR-1.7B-hf",
+    alignment_model: "Qwen3-ForcedAligner-0.6B-hf",
+    side_pass: true,
+  },
+];
 
 const languageOptions = [
   { value: "auto", label: "Auto-detect" },
@@ -317,7 +345,7 @@ async function fetchJobStatus(jobId: string) {
 function uploadToLocalEngine(
   file: File,
   language: string,
-  quality: "accurate" | "fast",
+  quality: QualityPreset,
   requestToken: string,
   onProgress: (percent: number) => void,
   register: (request: XMLHttpRequest) => void,
@@ -447,9 +475,9 @@ export default function Home() {
   const activeLineIndexesRef = useRef<number[]>([]);
 
   const [file, setFile] = useState<File | null>(null);
-  const [track, setTrack] = useState({ title: "No song loaded", artist: "Choose local audio" });
+  const [track, setTrack] = useState({ title: "No audio selected", artist: "Local file" });
   const [stage, setStage] = useState<ProcessingStage>("idle");
-  const [status, setStatus] = useState("Ready when you are");
+  const [status, setStatus] = useState("Ready");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [lines, setLines] = useState<LyricLine[]>([]);
@@ -459,8 +487,8 @@ export default function Home() {
   const [volume, setVolume] = useState(0.82);
   const [isMuted, setIsMuted] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [language, setLanguage] = useState("english");
-  const [quality, setQuality] = useState<"accurate" | "fast">("fast");
+  const [language, setLanguage] = useState("auto");
+  const [quality, setQuality] = useState<QualityPreset>("balanced");
   const [originalUrl, setOriginalUrl] = useState("");
   const [vocalUrl, setVocalUrl] = useState("");
   const [playbackMode, setPlaybackMode] = useState<"mix" | "vocals">("mix");
@@ -470,10 +498,14 @@ export default function Home() {
   );
   const [engineHealth, setEngineHealth] = useState<BackendHealth | null>(null);
   const [engineDetail, setEngineDetail] = useState("");
-  const [processingMetadata, setProcessingMetadata] = useState<ProcessingMetadata | null>(
-    null,
-  );
   const [focusedLineIndex, setFocusedLineIndex] = useState(-1);
+
+  const modelProfiles =
+    engineHealth?.model_profiles?.length
+      ? engineHealth.model_profiles
+      : FALLBACK_MODEL_PROFILES;
+  const selectedProfile =
+    modelProfiles.find((profile) => profile.id === quality) ?? modelProfiles[0];
 
   const lineWordOffsets = useMemo(() => buildLineWordOffsets(lines), [lines]);
 
@@ -820,9 +852,8 @@ export default function Home() {
       setError("");
       setLines([]);
       setEngineDetail("");
-      setProcessingMetadata(null);
       setStage("uploading");
-      setStatus("Sending the song to the local GPU engine");
+      setStatus("Uploading audio to the local engine");
       setProgress(1);
 
       try {
@@ -892,7 +923,9 @@ export default function Home() {
           if (job.duration > 0) setDuration(job.duration);
           if (job.device) {
             setEngineDetail(
-              `${job.device} · ${job.separation_model ?? "Demucs"} · ${job.transcription_model ?? "Whisper"}`,
+              [job.device, job.separation_model, job.transcription_model, job.alignment_model]
+                .filter(Boolean)
+                .join(" · "),
             );
           }
           if (job.vocal_url) setVocalUrl(`${LOCAL_API_URL}${job.vocal_url}`);
@@ -911,19 +944,8 @@ export default function Home() {
             const timedWords = job.words ?? [];
             const lyricLines = job.lines?.length ? job.lines : groupIntoLines(timedWords);
             if (!lyricLines.length) {
-              throw new Error("Whisper did not return any timed lyric lines.");
+              throw new Error("The selected transcription model did not return timed lyric lines.");
             }
-            setProcessingMetadata({
-              jobId: job.id,
-              createdAt: job.created_at ?? null,
-              quality: job.quality ?? quality,
-              languageSetting: job.language ?? language,
-              device: job.device ?? null,
-              separationModel: job.separation_model ?? null,
-              transcriptionModel:
-                job.transcription_model_id ?? job.transcription_model ?? null,
-              alignmentModelRequested: job.alignment_model_requested ?? null,
-            });
             setLines(lyricLines);
             setProgress(100);
             setStatus(`${timedWords.length} words synced locally`);
@@ -1035,12 +1057,11 @@ export default function Home() {
     clearObjectUrls();
     fileRef.current = null;
     setFile(null);
-    setTrack({ title: "No song loaded", artist: "Choose local audio" });
+    setTrack({ title: "No audio selected", artist: "Local file" });
     setStage("idle");
-    setStatus("Ready when you are");
+    setStatus("Ready");
     setProgress(0);
     setLines([]);
-    setProcessingMetadata(null);
     setOriginalUrl("");
     setVocalUrl("");
     setCurrentTime(0);
@@ -1133,13 +1154,13 @@ export default function Home() {
     if (!lines.length) return;
     const safeTitle = track.title.replace(/[^a-z0-9-_]+/gi, "-").replace(/^-|-$/g, "");
     if (kind === "json") {
-      const payload = buildTimingExport({
+      const payload = {
         title: track.title,
         artist: track.artist,
         duration,
-        processing: processingMetadata,
+        generatedOnDevice: true,
         lines,
-      });
+      };
       downloadBlob(
         new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
         `${safeTitle || "lyrics"}-word-timings.json`,
@@ -1163,16 +1184,16 @@ export default function Home() {
   ];
 
   const steps = [
-    { label: "Open the mix", detail: "Localhost handoff", rank: 1, icon: FileAudio },
+    { label: "Upload audio", detail: "Local API", rank: 1, icon: FileAudio },
     {
-      label: "Find the vocal",
-      detail: quality === "accurate" ? "HTDemucs fine-tuned" : "HTDemucs fast pass",
+      label: "Separate vocals",
+      detail: selectedProfile.demucs_model,
       rank: 2,
       icon: Mic2,
     },
     {
-      label: "Sync every word",
-      detail: quality === "accurate" ? "Whisper large-v3" : "Whisper large-v3 turbo",
+      label: "Transcribe and align",
+      detail: selectedProfile.transcription_model,
       rank: 3,
       icon: AudioLines,
     },
@@ -1215,10 +1236,10 @@ export default function Home() {
           </button>
           {showPrivacy && (
             <div className="privacy-popover" role="status">
-              <strong>Your song stays here.</strong>
+              <strong>Local processing</strong>
               <span>
-                The interface sends audio only to 127.0.0.1 on this PC. Demucs and Whisper run on
-                {engineHealth?.device ? ` ${engineHealth.device}` : " your local hardware"}.
+                Audio is sent only to 127.0.0.1. Models run on
+                {engineHealth?.device ? ` ${engineHealth.device}` : " this computer"}.
               </span>
             </div>
           )}
@@ -1235,14 +1256,9 @@ export default function Home() {
           {!file ? (
             <>
               <div className="intro-copy">
-                <span className="eyebrow">PRIVATE · LOCAL · YOURS</span>
-                <h1>
-                  Turn any song into <span>live lyrics.</span>
-                </h1>
-                <p>
-                  Drop a track. Lyricwave separates the vocal and syncs every word without
-                  sending the song away from this machine.
-                </p>
+                <span className="eyebrow">LOCAL GPU TRANSCRIPTION</span>
+                <h1>Word-timed lyrics</h1>
+                <p>Select an audio file. Processing runs on this computer.</p>
               </div>
 
               <div
@@ -1260,8 +1276,8 @@ export default function Home() {
                 <div className="upload-icon">
                   <UploadCloud size={25} strokeWidth={1.8} />
                 </div>
-                <strong>{dragging ? "Let it drop" : "Drop your song here"}</strong>
-                <span>MP3, WAV, FLAC, M4A · up to 500 MB</span>
+                <strong>{dragging ? "Release to select" : "Drop audio file"}</strong>
+                <span>MP3, WAV, FLAC, M4A, AAC, OGG, WebM · up to 500 MB</span>
                 <button className="primary-button" type="button" onClick={() => inputRef.current?.click()}>
                   Choose a song
                 </button>
@@ -1279,22 +1295,23 @@ export default function Home() {
               </label>
 
               <label className="language-control mode-control">
-                <span>Processing</span>
+                <span>Model profile</span>
                 <select
                   value={quality}
-                  onChange={(event) => setQuality(event.target.value as "accurate" | "fast")}
+                  onChange={(event) => setQuality(event.target.value as QualityPreset)}
                 >
-                  <option value="fast">Fast · turbo</option>
-                  <option value="accurate">Accurate · large-v3</option>
+                  {modelProfiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.label}
+                    </option>
+                  ))}
                 </select>
               </label>
 
               <p className="model-note">
                 {engineState === "offline"
-                  ? "Local engine offline. Run npm run setup:engine once, then npm run dev."
-                  : quality === "fast"
-                    ? "Fast is the best starting point. Accurate adds a slower second pass."
-                    : "Accurate uses the full local models and keeps downloads cached for later runs."}
+                  ? "Local engine offline. Run npm run setup:engine, then npm run dev."
+                  : selectedProfile.description}
               </p>
             </>
           ) : (
@@ -1305,7 +1322,7 @@ export default function Home() {
                   <Waves size={44} strokeWidth={1.3} />
                 </div>
                 <div className="track-heading">
-                  <span className="eyebrow">NOW PLAYING</span>
+                  <span className="eyebrow">SELECTED FILE</span>
                   <h1>{track.title}</h1>
                   <p>{track.artist}</p>
                   <span className="file-meta">
@@ -1320,7 +1337,7 @@ export default function Home() {
                 aria-busy={stage !== "complete" && stage !== "error"}
               >
                 <div className="pipeline-topline">
-                  <span>{stage === "complete" ? "Ready to play" : stage === "error" ? "Needs attention" : "Making lyrics"}</span>
+                  <span>{stage === "complete" ? "Complete" : stage === "error" ? "Error" : "Processing"}</span>
                   <strong>{Math.round(progress)}%</strong>
                 </div>
                 <div
@@ -1341,9 +1358,9 @@ export default function Home() {
                       <Check size={15} strokeWidth={2.6} />
                     </span>
                     <span>
-                      <strong>Playback ready</strong>
+                      <strong>Complete</strong>
                       <small>
-                        {wordTimeline.length} words · {lines.length} lines · synced on this PC
+                        {wordTimeline.length} words · {lines.length} lines · local processing
                       </small>
                     </span>
                   </div>
@@ -1410,7 +1427,7 @@ export default function Home() {
           <div className="lyrics-toolbar">
             <div className="lyrics-status">
               <span className={`live-dot ${isPlaying ? "is-live" : ""}`} />
-              <span>{stage === "complete" ? "LIVE LYRICS" : "LYRICS ROOM"}</span>
+              <span>LYRICS</span>
               {stage === "complete" && (
                 <span className="lyrics-meta">
                   {wordTimeline.length} words · {lines.length} lines
@@ -1438,44 +1455,28 @@ export default function Home() {
               />
             ) : stage === "uploading" ? (
               <div className="holding-lyrics processing-lyrics">
-                <p>Passing the song</p>
-                <p>
-                  to the <em>GPU.</em>
-                </p>
-                <span>The player is already usable while the local engine starts.</span>
+                <p>Uploading audio</p>
+                <span>{status}</span>
               </div>
             ) : stage === "separating" ? (
               <div className="holding-lyrics processing-lyrics">
-                <p>Pulling the voice</p>
-                <p>
-                  out of the <em>mix.</em>
-                </p>
-                <span>Fine-tuned Demucs is separating the vocal on this PC.</span>
+                <p>Separating vocals</p>
+                <span>{status}</span>
               </div>
             ) : stage === "transcribing" ? (
               <div className="holding-lyrics processing-lyrics">
-                <p>Listening for</p>
-                <p>
-                  every <em>word.</em>
-                </p>
-                <span>Whisper is adding an exact timestamp to each recognized word.</span>
+                <p>Transcribing and aligning</p>
+                <span>{status}</span>
               </div>
             ) : stage === "error" ? (
               <div className="holding-lyrics error-lyrics">
-                <p>That one went</p>
-                <p>
-                  a little <em>quiet.</em>
-                </p>
-                <span>Try the file again or choose another track.</span>
+                <p>Processing failed</p>
+                <span>{error || "Retry or select another file."}</span>
               </div>
             ) : (
               <div className="holding-lyrics">
-                <p>Drop a song.</p>
-                <p>
-                  We’ll find the <em>voice</em>
-                </p>
-                <p>and light up every word.</p>
-                <span>Click any finished word to jump to its exact timestamp.</span>
+                <p>No lyrics loaded</p>
+                <span>Select an audio file to begin.</span>
               </div>
             )}
           </div>

@@ -50,24 +50,20 @@ Open `http://localhost:3000`. `npm run dev` starts both the interface and the pr
 inference API on `http://127.0.0.1:8008`. The launcher and engine terminate their
 complete process trees on Ctrl+C or job cancellation on both Windows and POSIX systems.
 
-## Processing modes
+## Model profiles
 
-Fast is the recommended default. It uses:
+The interface exposes three profiles and defaults to Recommended:
 
-- `htdemucs`
-- `openai/whisper-large-v3-turbo`
-- `facebook/wav2vec2-base-960h` for English word and character alignment
+| Profile | Vocal separation | Transcription | Word timing |
+| --- | --- | --- | --- |
+| Fast | `htdemucs` | `openai/whisper-large-v3-turbo` | `facebook/wav2vec2-base-960h` for English |
+| Recommended | `htdemucs` | `Qwen/Qwen3-ASR-0.6B-hf` | `Qwen/Qwen3-ForcedAligner-0.6B-hf` |
+| Best quality | `htdemucs_ft` with four passes | `Qwen/Qwen3-ASR-1.7B-hf` | Qwen forced alignment plus a background-vocal pass |
 
-Accurate uses:
-
-- `htdemucs_ft`
-- `openai/whisper-large-v3`
-- `facebook/wav2vec2-large-960h-lv60-self` for higher-capacity English alignment
-- an independent stereo-side pass for short background responses and ad-libs
-
-The Whisper checkpoints remain separate from alignment: Whisper determines the lyric
-text and phrase boundaries, then the CTC model tightens English word and character
-timing after Whisper has been released from GPU memory.
+Recommended and Best quality fall back to Whisper large-v3-turbo and large-v3
+respectively if a Qwen checkpoint cannot load. English timing then falls back to the
+existing Wav2Vec2 CTC path when needed. Models are downloaded once into the normal
+local Hugging Face cache.
 
 ## Frontend runtime
 
@@ -92,8 +88,9 @@ takes precedence over the shared setting.
 ```powershell
 $env:LYRICWAVE_ALIGNER_MODEL = "owner/model"
 $env:LYRICWAVE_ACCURATE_ALIGNER_MODEL = "owner/accurate-aligner"
-$env:LYRICWAVE_WHISPER_MODEL = "owner/whisper-compatible-model"
-$env:LYRICWAVE_FAST_WHISPER_MODEL = "owner/fast-whisper-model"
+$env:LYRICWAVE_ASR_MODEL = "owner/asr-model"
+$env:LYRICWAVE_BALANCED_ASR_MODEL = "owner/recommended-asr"
+$env:LYRICWAVE_FALLBACK_ASR_MODEL = "owner/whisper-fallback"
 $env:LYRICWAVE_DEMUCS_MODEL = "custom-demucs-model"
 $env:LYRICWAVE_VRAM_FRACTION = "0.75"
 $env:LYRICWAVE_CPU_THREADS = "8"
@@ -103,9 +100,9 @@ $env:LYRICWAVE_CLEANUP_INTERVAL_SECONDS = "900"
 npm run dev
 ```
 
-Custom transcription checkpoints must be compatible with Transformers'
-`AutoModelForSpeechSeq2Seq` Whisper timestamp path. Custom aligners must expose a
-Wav2Vec2-compatible CTC alphabet containing English letters and a word delimiter.
+Custom ASR checkpoints must match the selected `qwen3` or `whisper` backend.
+Custom aligners must match the selected `qwen3` or `ctc` backend. Backend and model
+overrides can be shared or profile-specific.
 `LYRICWAVE_VRAM_FRACTION` is clamped to the range `0.20`–`0.95`.
 `LYRICWAVE_CPU_THREADS` is parsed once for native math libraries and PyTorch, defaults
 to at most eight available logical CPUs, and is clamped to 1–32 without exceeding the
@@ -149,7 +146,7 @@ retries one rejected mutation with the new token rather than entering a retry lo
 
 ## Model benchmarking
 
-Use exported word-timing JSON to compare Fast, Accurate, or custom model runs against a
+Use exported word-timing JSON to compare Fast, Recommended, Best quality, or custom model runs against a
 manually corrected reference from the same track:
 
 ```bash
@@ -168,10 +165,7 @@ npm run benchmark:lyrics -- reference.json candidate.json --json
 ```
 
 Reference and candidate files may use lyricwave's exported `lines` structure or a
-top-level `words` array. New timing exports use a versioned schema and include the job
-quality, language setting, device, Demucs model, full Whisper model ID, and requested
-CTC aligner so benchmark results can be traced back to their processing profile.
-Text-only references still produce WER/CER; timing metrics are
+top-level `words` array. Text-only references still produce WER/CER; timing metrics are
 calculated only for exact aligned words where both files contain start and end times.
 This makes model or threshold changes measurable on a representative private corpus
 without committing any songs, lyrics, or generated outputs.

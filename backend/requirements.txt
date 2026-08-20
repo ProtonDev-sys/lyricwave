@@ -1,7 +1,9 @@
 accelerate==1.14.0
 demucs==4.1.0
 fastapi==0.141.1
+nagisa==0.3.0
 numpy>=2.0,<3
 python-multipart==0.0.32
+soynlp==0.0.493
 transformers==5.15.0
 uvicorn[standard]==0.52.3

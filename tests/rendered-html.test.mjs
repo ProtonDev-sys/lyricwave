@@ -25,11 +25,11 @@ test("server-renders the lyricwave workspace", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>lyricwave — Your song, word for word<\/title>/i);
-  assert.match(html, /Turn any song into/);
-  assert.match(html, /live lyrics\./);
+  assert.match(html, /<title>lyricwave — local word-timed lyrics<\/title>/i);
+  assert.match(html, /Word-timed lyrics/);
   assert.match(html, /Checking local engine/);
-  assert.match(html, /Drop your song here/);
+  assert.match(html, /Drop audio file/);
+  assert.doesNotMatch(html, /Turn any song|PRIVATE · LOCAL · YOURS|Let it drop|NOW PLAYING|Making lyrics|LYRICS ROOM/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
@@ -50,6 +50,14 @@ test("uses the modular localhost inference engine and word-level results", async
   );
   const inferenceWorker = await readFile(
     new URL("../backend/inference_worker.py", import.meta.url),
+    "utf8",
+  );
+  const qwenAlignment = await readFile(
+    new URL("../backend/qwen_alignment.py", import.meta.url),
+    "utf8",
+  );
+  const modelRuntime = await readFile(
+    new URL("../backend/model_runtime.py", import.meta.url),
     "utf8",
   );
 
@@ -82,7 +90,11 @@ test("uses the modular localhost inference engine and word-level results", async
   assert.match(timeline, /buildPrefixMaxEnds/);
   assert.match(timeline, /pollingRetryDelay/);
   assert.match(config, /htdemucs_ft/);
-  assert.match(config, /whisper-large-v3/);
+  assert.match(config, /Qwen3-ASR-0\.6B-hf/);
+  assert.match(config, /Qwen3-ASR-1\.7B-hf/);
+  assert.match(config, /DEFAULT_QUALITY: Final = "balanced"/);
+  assert.match(modelRuntime, /AutoModelForMultimodalLM/);
+  assert.match(qwenAlignment, /AutoModelForTokenClassification/);
   assert.match(pipeline, /return_timestamps=True/);
   assert.doesNotMatch(pipeline, /return_timestamps="word"/);
   assert.match(alignment, /AutoModelForCTC/);
