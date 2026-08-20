@@ -134,14 +134,17 @@ from localhost only, and marks responses as non-cacheable.
 ```bash
 npm run audit:production
 npm run lint
+npm run typecheck
 npm run build
 npm run test:frontend
 npm run test:python
 npm run check
 ```
 
-The Python test command discovers every `backend/test_*.py` module. The GitHub Actions
-workflow runs a high-severity production dependency audit, frontend build/lint/tests,
-and the GPU-free backend regression suite on each pull request and push to `main`.
-Model inference begins only after a user selects an audio file; CUDA model downloads
-and real-track inference remain local runtime checks.
+`npm run test:python` invokes `python -m unittest backend -v`, so the backend package
+itself is a stable discovery target for every `backend/test_*.py` module. The GitHub
+Actions workflow runs the production dependency audit, ESLint, explicit TypeScript
+checking, frontend build/tests, Python bytecode compilation, and the GPU-free backend
+regression suite on each pull request and push to `main`. Model inference begins only
+after a user selects an audio file; CUDA model downloads and real-track inference
+remain local runtime checks.
