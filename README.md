@@ -132,7 +132,9 @@ uploads are removed immediately. The API is bound to loopback, validates the Hos
 rejects browser origins outside localhost, and marks responses as non-cacheable. Each
 engine process also creates a random request token. The local interface reads it from the
 health endpoint and supplies it through `X-Lyricwave-Token` for POST and DELETE requests;
-cross-origin pages cannot read the token or submit mutation requests without it.
+cross-origin pages cannot read the token or submit mutation requests without it. If the engine
+restarts and rotates this token, the interface refreshes health and retries one rejected mutation
+with the new token rather than entering a retry loop.
 
 ## Verify
 

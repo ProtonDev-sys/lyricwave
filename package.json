@@ -13,7 +13,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "typecheck": "tsc --noEmit",
-    "test:frontend": "node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs tests/lyric-timeline.test.mjs",
+    "test:frontend": "node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs tests/lyric-timeline.test.mjs tests/local-engine.test.mjs",
     "test:python": "node scripts/run-python.mjs -m unittest backend -v",
     "test": "npm run build && npm run test:frontend && npm run test:python",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .venv --ignore-pattern .local-data",

@@ -40,6 +40,10 @@ import {
   findLastStartedIndex,
   pollingRetryDelay,
 } from "./lyric-timeline.js";
+import {
+  LocalEngineRequestError,
+  withRefreshedRequestToken,
+} from "./local-engine.js";
 import { wordFillAt } from "./lyric-timing.js";
 type ProcessingStage =
   | "idle"
@@ -116,6 +120,8 @@ const PLAYER_CLOCK_INTERVAL_MS = 100;
 const LOCAL_API_URL =
   process.env.NEXT_PUBLIC_LYRICWAVE_API_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8008";
 const LOCAL_REQUEST_TOKEN_HEADER = "X-Lyricwave-Token";
+const ENGINE_OFFLINE_MESSAGE =
+  "The local engine is offline. Run `npm run setup:engine` once, then start the app with `npm run dev`.";
 
 const languageOptions = [
   { value: "auto", label: "Auto-detect" },
@@ -226,6 +232,42 @@ function apiMessage(payload: unknown, fallback: string) {
   return fallback;
 }
 
+async function readEngineHealth() {
+  const response = await fetch(`${LOCAL_API_URL}/api/health`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(5_000),
+  });
+  const payload = (await response.json()) as BackendHealth | { detail?: string };
+  if (!response.ok) {
+    throw new Error(apiMessage(payload, `Local engine returned ${response.status}.`));
+  }
+  const health = payload as BackendHealth;
+  if (!health.request_token) {
+    throw new Error("The local engine did not return a request token.");
+  }
+  return health;
+}
+
+async function cancelLocalJob(jobId: string, requestToken: string) {
+  const response = await fetch(`${LOCAL_API_URL}/api/jobs/${jobId}`, {
+    method: "DELETE",
+    keepalive: true,
+    headers: { [LOCAL_REQUEST_TOKEN_HEADER]: requestToken },
+  });
+  if (response.ok) return;
+
+  let payload: unknown = null;
+  try {
+    payload = await response.json();
+  } catch {
+    // A plain-text proxy error still carries a useful HTTP status.
+  }
+  throw new LocalEngineRequestError(
+    apiMessage(payload, `The local engine returned ${response.status}.`),
+    response.status,
+  );
+}
+
 class RetryablePollingError extends Error {}
 
 function isRetryablePollingError(error: unknown) {
@@ -282,7 +324,12 @@ function uploadToLocalEngine(
         resolve(payload as BackendJob);
         return;
       }
-      reject(new Error(apiMessage(payload, `The local engine returned ${request.status}.`)));
+      reject(
+        new LocalEngineRequestError(
+          apiMessage(payload, `The local engine returned ${request.status}.`),
+          request.status,
+        ),
+      );
     };
     const form = new FormData();
     form.append("file", file, file.name);
@@ -566,23 +613,16 @@ export default function Home() {
   const checkEngine = useCallback(async () => {
     setEngineState("checking");
     try {
-      const response = await fetch(`${LOCAL_API_URL}/api/health`, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (!response.ok) throw new Error(`Local engine returned ${response.status}`);
-      const health = (await response.json()) as BackendHealth;
-      if (!health.request_token) {
-        throw new Error("The local engine did not return a request token.");
-      }
+      const health = await readEngineHealth();
       requestTokenRef.current = health.request_token;
       setEngineHealth(health);
       setEngineState(health.ready ? "online" : "offline");
-      return health.ready;
+      return health;
     } catch {
+      requestTokenRef.current = "";
       setEngineHealth(null);
       setEngineState("offline");
-      return false;
+      return null;
     }
   }, []);
 
@@ -591,19 +631,32 @@ export default function Home() {
     return () => window.clearTimeout(checkTimer);
   }, [checkEngine]);
 
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void checkEngine();
+    };
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [checkEngine]);
+
   const cancelCurrentJob = useCallback(() => {
     uploadRequestRef.current?.abort();
     uploadRequestRef.current = null;
     const jobId = activeJobRef.current;
     activeJobRef.current = null;
     if (jobId) {
-      const requestToken = requestTokenRef.current;
-      void fetch(`${LOCAL_API_URL}/api/jobs/${jobId}`, {
-        method: "DELETE",
-        keepalive: true,
-        headers: requestToken
-          ? { [LOCAL_REQUEST_TOKEN_HEADER]: requestToken }
-          : undefined,
+      void withRefreshedRequestToken({
+        token: requestTokenRef.current,
+        refreshToken: async () => {
+          const health = await readEngineHealth();
+          requestTokenRef.current = health.request_token;
+          return health.request_token;
+        },
+        request: (requestToken) => cancelLocalJob(jobId, requestToken),
       }).catch(() => {});
     }
   }, []);
@@ -750,30 +803,36 @@ export default function Home() {
       setProgress(1);
 
       try {
-        const engineReady = engineState === "online" || (await checkEngine());
-        if (!engineReady) {
-          throw new Error(
-            "The local engine is offline. Run `npm run setup:engine` once, then start the app with `npm run dev`.",
-          );
-        }
+        const currentHealth =
+          engineState === "online" && requestTokenRef.current
+            ? engineHealth
+            : await checkEngine();
+        const engineReady =
+          (engineState === "online" && Boolean(requestTokenRef.current)) ||
+          Boolean(currentHealth?.ready);
+        if (!engineReady) throw new Error(ENGINE_OFFLINE_MESSAGE);
 
-        const requestToken = requestTokenRef.current;
-        if (!requestToken) {
-          throw new Error("The local engine request token is unavailable.");
-        }
-
-        const created = await uploadToLocalEngine(
-          nextFile,
-          language,
-          quality,
-          requestToken,
-          (uploadProgress) => {
-            if (stillCurrent()) setProgress(Math.max(1, uploadProgress));
+        const created = await withRefreshedRequestToken({
+          token: requestTokenRef.current,
+          refreshToken: async () => {
+            const health = await checkEngine();
+            if (!health?.ready) throw new Error(ENGINE_OFFLINE_MESSAGE);
+            return health.request_token;
           },
-          (request) => {
-            uploadRequestRef.current = request;
-          },
-        );
+          request: (requestToken) =>
+            uploadToLocalEngine(
+              nextFile,
+              language,
+              quality,
+              requestToken,
+              (uploadProgress) => {
+                if (stillCurrent()) setProgress(Math.max(1, uploadProgress));
+              },
+              (request) => {
+                uploadRequestRef.current = request;
+              },
+            ),
+        });
         uploadRequestRef.current = null;
         if (!stillCurrent()) return;
         activeJobRef.current = created.id;
@@ -851,7 +910,7 @@ export default function Home() {
         setStage("error");
       }
     },
-    [cancelCurrentJob, checkEngine, engineState, language, quality],
+    [cancelCurrentJob, checkEngine, engineHealth, engineState, language, quality],
   );
 
   const loadFile = useCallback(
