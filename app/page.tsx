@@ -44,6 +44,7 @@ import {
   LocalEngineRequestError,
   withRefreshedRequestToken,
 } from "./local-engine.js";
+import { buildTimingExport } from "./lyric-export.js";
 import { wordFillAt } from "./lyric-timing.js";
 type ProcessingStage =
   | "idle"
@@ -94,8 +95,24 @@ type BackendJob = {
   vocal_url?: string | null;
   words?: TimedWord[];
   lines?: LyricLine[];
+  quality?: "accurate" | "fast";
+  language?: string;
+  created_at?: string;
   separation_model?: string;
   transcription_model?: string;
+  transcription_model_id?: string;
+  alignment_model_requested?: string;
+};
+
+type ProcessingMetadata = {
+  jobId: string;
+  createdAt: string | null;
+  quality: "accurate" | "fast";
+  languageSetting: string;
+  device: string | null;
+  separationModel: string | null;
+  transcriptionModel: string | null;
+  alignmentModelRequested: string | null;
 };
 
 type BackendHealth = {
@@ -453,6 +470,9 @@ export default function Home() {
   );
   const [engineHealth, setEngineHealth] = useState<BackendHealth | null>(null);
   const [engineDetail, setEngineDetail] = useState("");
+  const [processingMetadata, setProcessingMetadata] = useState<ProcessingMetadata | null>(
+    null,
+  );
   const [focusedLineIndex, setFocusedLineIndex] = useState(-1);
 
   const lineWordOffsets = useMemo(() => buildLineWordOffsets(lines), [lines]);
@@ -800,6 +820,7 @@ export default function Home() {
       setError("");
       setLines([]);
       setEngineDetail("");
+      setProcessingMetadata(null);
       setStage("uploading");
       setStatus("Sending the song to the local GPU engine");
       setProgress(1);
@@ -892,6 +913,17 @@ export default function Home() {
             if (!lyricLines.length) {
               throw new Error("Whisper did not return any timed lyric lines.");
             }
+            setProcessingMetadata({
+              jobId: job.id,
+              createdAt: job.created_at ?? null,
+              quality: job.quality ?? quality,
+              languageSetting: job.language ?? language,
+              device: job.device ?? null,
+              separationModel: job.separation_model ?? null,
+              transcriptionModel:
+                job.transcription_model_id ?? job.transcription_model ?? null,
+              alignmentModelRequested: job.alignment_model_requested ?? null,
+            });
             setLines(lyricLines);
             setProgress(100);
             setStatus(`${timedWords.length} words synced locally`);
@@ -1008,6 +1040,7 @@ export default function Home() {
     setStatus("Ready when you are");
     setProgress(0);
     setLines([]);
+    setProcessingMetadata(null);
     setOriginalUrl("");
     setVocalUrl("");
     setCurrentTime(0);
@@ -1100,13 +1133,13 @@ export default function Home() {
     if (!lines.length) return;
     const safeTitle = track.title.replace(/[^a-z0-9-_]+/gi, "-").replace(/^-|-$/g, "");
     if (kind === "json") {
-      const payload = {
+      const payload = buildTimingExport({
         title: track.title,
         artist: track.artist,
         duration,
-        generatedOnDevice: true,
+        processing: processingMetadata,
         lines,
-      };
+      });
       downloadBlob(
         new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
         `${safeTitle || "lyrics"}-word-timings.json`,
