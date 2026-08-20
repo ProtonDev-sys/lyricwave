@@ -913,7 +913,11 @@ select:focus-visible {
   width: 100%;
   margin: 0 0 0.34em;
   padding: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
   color: var(--cream);
+  font-family: inherit;
   font-size: clamp(36px, 3.85vw, 60px);
   font-weight: 710;
   line-height: 1.12;
@@ -922,17 +926,6 @@ select:focus-visible {
   cursor: pointer;
   opacity: 0.56;
   transition: opacity 130ms ease-out;
-}
-
-.line-seek-target {
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
 }
 
 .lyric-line:hover {
@@ -1020,9 +1013,9 @@ select:focus-visible {
   filter: drop-shadow(0 0 9px rgba(255, 250, 245, 0.16));
 }
 
-.lyric-word:focus-visible {
+.lyric-line:focus-visible {
   outline: 2px solid rgba(255, 116, 88, 0.88);
-  outline-offset: 4px;
+  outline-offset: 6px;
 }
 
 .lyric-line.is-adlib .lyric-word {
