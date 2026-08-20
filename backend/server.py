@@ -28,6 +28,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend.config import (
     ALLOWED_EXTENSIONS,
+    cpu_thread_count,
     JOB_ROOT,
     MAX_DURATION_SECONDS,
     MAX_FILE_SIZE,
@@ -249,14 +250,15 @@ def _runtime_info() -> dict[str, Any]:
 
 def _worker_environment() -> dict[str, str]:
     environment = os.environ.copy()
+    thread_budget = str(cpu_thread_count())
     environment.update(
         {
             "PYTHONUNBUFFERED": "1",
             "TOKENIZERS_PARALLELISM": "false",
             "HF_HUB_DISABLE_SYMLINKS_WARNING": "1",
-            "OMP_NUM_THREADS": environment.get("LYRICWAVE_CPU_THREADS", "8"),
-            "MKL_NUM_THREADS": environment.get("LYRICWAVE_CPU_THREADS", "8"),
-            "NUMEXPR_NUM_THREADS": environment.get("LYRICWAVE_CPU_THREADS", "8"),
+            "OMP_NUM_THREADS": thread_budget,
+            "MKL_NUM_THREADS": thread_budget,
+            "NUMEXPR_NUM_THREADS": thread_budget,
         }
     )
     return environment
