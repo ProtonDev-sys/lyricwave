@@ -8,11 +8,17 @@ from pathlib import Path
 
 from backend.ctc_alignment import release_alignment_model
 from backend.inference_pipeline import transcribe_vocals
-from backend.server import JobState, _release_models, _write_json_atomic
+from backend.job_state import JobState, write_json_atomic
+from backend.model_runtime import release_whisper_model
 
 
-def _write_json(path: Path, payload: dict[str, object]) -> None:
-    _write_json_atomic(path, payload)
+def _vram_fraction() -> float:
+    raw = os.environ.get("LYRICWAVE_VRAM_FRACTION", "0.70").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.70
+    return max(0.20, min(0.95, value))
 
 
 def main() -> int:
@@ -27,22 +33,12 @@ def main() -> int:
     parser.add_argument("--result", required=True)
     arguments = parser.parse_args()
 
-    # Cap the caching allocator well below total VRAM. A bad input should fail
-    # with a handled CUDA OOM instead of pressuring the display driver.
-    import torch
-
-    torch.set_num_threads(min(8, max(1, os.cpu_count() or 1)))
-    torch.set_num_interop_threads(2)
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is not available to the inference worker.")
-    torch.cuda.set_per_process_memory_fraction(0.70, device=0)
-
     work_dir = Path(arguments.work_dir).resolve()
     vocal_path = Path(arguments.vocal).resolve()
     progress_path = Path(arguments.progress).resolve()
     result_path = Path(arguments.result).resolve()
     job = JobState(
-        id="worker",
+        id=work_dir.name or "worker",
         filename=arguments.filename,
         source_path=vocal_path,
         work_dir=work_dir,
@@ -58,18 +54,26 @@ def main() -> int:
     job.update()
 
     try:
+        import torch
+
+        torch.set_num_threads(min(8, max(1, os.cpu_count() or 1)))
+        torch.set_num_interop_threads(2)
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA is not available to the inference worker.")
+        torch.cuda.set_per_process_memory_fraction(_vram_fraction(), device=0)
+
         words = transcribe_vocals(job, vocal_path)
-        _write_json(result_path, {"ok": True, "words": words})
+        write_json_atomic(result_path, {"ok": True, "words": words})
         return 0
     except Exception as error:
         traceback.print_exc()
         message = str(error).strip() or error.__class__.__name__
         job.update(stage="error", status="Processing stopped", error=message)
-        _write_json(result_path, {"ok": False, "error": message})
+        write_json_atomic(result_path, {"ok": False, "error": message})
         return 1
     finally:
         release_alignment_model()
-        _release_models()
+        release_whisper_model()
 
 
 if __name__ == "__main__":

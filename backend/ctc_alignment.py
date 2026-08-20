@@ -8,6 +8,11 @@ from typing import Any
 import numpy as np
 
 from backend.inference_regions import SAMPLE_RATE
+from backend.alignment_text import (
+    alignment_spoken_form,
+    ctc_gap_is_silent,
+    ctc_token_spans,
+)
 
 
 _DEFAULT_ALIGNMENT_MODELS = {
@@ -76,12 +81,8 @@ def _load_ctc_aligner(job: Any) -> tuple[Any, Any]:
     def load(model_id: str) -> tuple[Any, Any]:
         global _ALIGN_MODEL, _ALIGN_MODEL_ID, _ALIGN_PROCESSOR, _ALIGN_REQUEST_ID
 
-        job.update(
-            status=f"Loading {model_id.split('/')[-1]} word aligner",
-        )
+        job.update(status=f"Loading {model_id.split('/')[-1]} word aligner")
         processor = AutoProcessor.from_pretrained(model_id)
-        # The official large LV-60 checkpoint is a PyTorch .bin file rather
-        # than safetensors, so do not force use_safetensors here.
         model = AutoModelForCTC.from_pretrained(
             model_id,
             dtype=torch.float16,
@@ -92,9 +93,6 @@ def _load_ctc_aligner(job: Any) -> tuple[Any, Any]:
         _ALIGN_PROCESSOR = processor
         _ALIGN_MODEL = model
         _ALIGN_MODEL_ID = model_id
-        # Cache the successful fallback against the originally requested model.
-        # Otherwise an Accurate-mode OOM would retry the large checkpoint for
-        # every lyric phrase before falling back to the base model again.
         _ALIGN_REQUEST_ID = requested_model_id
         return model, processor
 
@@ -115,9 +113,6 @@ def _load_ctc_aligner(job: Any) -> tuple[Any, Any]:
                 return load(model_id)
             except Exception as error:
                 failures.append(f"{model_id}: {error}")
-            # Leave the exception scope before loading another model so a
-            # partially constructed checkpoint is no longer retained by its
-            # traceback during a CUDA out-of-memory fallback.
             release_alignment_model()
             if candidate_index + 1 < len(candidates):
                 next_model_id = candidates[candidate_index + 1]
@@ -133,7 +128,6 @@ def _load_ctc_aligner(job: Any) -> tuple[Any, Any]:
 
 
 def _align_words_ctc(
-    core: Any,
     job: Any,
     audio: np.ndarray,
     words: list[dict[str, Any]],
@@ -151,7 +145,7 @@ def _align_words_ctc(
     owner_token_indexes: dict[int, list[int]] = {}
     valid_words: list[tuple[int, dict[str, Any]]] = []
     for word_index, word in enumerate(words):
-        normalized = core._alignment_spoken_form(str(word["text"]))
+        normalized = alignment_spoken_form(str(word["text"]))
         character_ids: list[int] = []
         for character in normalized:
             token_id = int(tokenizer.convert_tokens_to_ids(character))
@@ -184,7 +178,7 @@ def _align_words_ctc(
         emissions = model(inputs).logits[0].float().log_softmax(dim=-1).cpu()
     del inputs
 
-    token_spans = core._ctc_token_spans(emissions, target_ids, blank_id)
+    token_spans = ctc_token_spans(emissions, target_ids, blank_id)
     if not token_spans:
         return []
     seconds_per_frame = (audio.size / SAMPLE_RATE) / emissions.shape[0]
@@ -243,7 +237,7 @@ def _align_words_ctc(
             if index > 0:
                 previous_end = spans[index - 1][1] * seconds_per_frame
                 current_start = start * seconds_per_frame
-                if core._ctc_gap_is_silent(
+                if ctc_gap_is_silent(
                     audio,
                     previous_end,
                     current_start,
@@ -261,17 +255,15 @@ def _align_words_ctc(
                 "_confidence": round(confidence, 4),
                 "_kind": str(word.get("_kind", "lead")),
                 "_explicit_adlib": bool(word.get("_explicit_adlib", False)),
+                "_source_index": word_index,
             }
         )
     return aligned
 
 
-def _mean_alignment_confidence(
-    core: Any,
-    aligned: list[dict[str, Any]],
-) -> float:
+def _mean_alignment_confidence(aligned: list[dict[str, Any]]) -> float:
     weights = [
-        max(1, len(core._alignment_spoken_form(str(word["text"]))))
+        max(1, len(alignment_spoken_form(str(word["text"]))))
         for word in aligned
     ]
     if not weights:
@@ -282,3 +274,19 @@ def _mean_alignment_confidence(
             weights=weights,
         )
     )
+
+
+def _alignment_coverage(
+    aligned: list[dict[str, Any]],
+    raw_words: list[dict[str, Any]],
+) -> float:
+    expected = sum(
+        max(1, len(alignment_spoken_form(str(word.get("text", "")))))
+        for word in raw_words
+        if alignment_spoken_form(str(word.get("text", "")))
+    )
+    covered = sum(
+        max(1, len(alignment_spoken_form(str(word.get("text", "")))))
+        for word in aligned
+    )
+    return min(1.0, covered / expected) if expected else 0.0

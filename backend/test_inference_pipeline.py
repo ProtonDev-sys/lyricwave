@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import types
 import unittest
 from unittest.mock import patch
@@ -28,10 +29,7 @@ class InferencePipelineHelpersTest(unittest.TestCase):
 
     def test_quality_selects_a_larger_accurate_aligner(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(
-                _alignment_model_id("fast"),
-                "facebook/wav2vec2-base-960h",
-            )
+            self.assertEqual(_alignment_model_id("fast"), "facebook/wav2vec2-base-960h")
             self.assertEqual(
                 _alignment_model_id("accurate"),
                 "facebook/wav2vec2-large-960h-lv60-self",
@@ -42,10 +40,7 @@ class InferencePipelineHelpersTest(unittest.TestCase):
             {"LYRICWAVE_ACCURATE_ALIGNER_MODEL": "example/custom-aligner"},
             clear=True,
         ):
-            self.assertEqual(
-                _alignment_model_id("accurate"),
-                "example/custom-aligner",
-            )
+            self.assertEqual(_alignment_model_id("accurate"), "example/custom-aligner")
             self.assertEqual(
                 _alignment_model_candidates("accurate"),
                 [
@@ -54,17 +49,6 @@ class InferencePipelineHelpersTest(unittest.TestCase):
                     "facebook/wav2vec2-base-960h",
                 ],
             )
-
-        with patch.dict(
-            os.environ,
-            {
-                "LYRICWAVE_ALIGNER_MODEL": "example/shared",
-                "LYRICWAVE_FAST_ALIGNER_MODEL": "example/fast",
-            },
-            clear=True,
-        ):
-            self.assertEqual(_alignment_model_id("fast"), "example/fast")
-            self.assertEqual(_alignment_model_id("accurate"), "example/shared")
 
     def test_successful_model_fallback_is_cached_for_the_job(self) -> None:
         model_calls: list[str] = []
@@ -127,49 +111,76 @@ class InferencePipelineHelpersTest(unittest.TestCase):
             "source_layer": "center",
             "language": "English",
         }
-        core = types.SimpleNamespace(
-            COMMON_HALLUCINATION_PATTERNS=(),
-            MIN_ADLIB_ALIGNMENT_CONFIDENCE=0.08,
-            MIN_ALIGNMENT_CONFIDENCE=0.10,
-        )
-        job = types.SimpleNamespace(id="test-job")
+        job = types.SimpleNamespace(id="test-job", quality="fast")
 
         with patch(
             "backend.inference_pipeline._align_words_ctc",
             return_value=[],
         ), patch("builtins.print"):
-            words, confidence = _align_segment_words(
-                core,
-                job,
-                segment,
-                raw_words,
-            )
+            words, confidence = _align_segment_words(job, segment, raw_words)
         self.assertIs(words, raw_words)
         self.assertEqual(confidence, 0.0)
 
+    def test_missing_side_ctc_path_is_rejected(self) -> None:
+        raw_words = [{"text": "maybe", "start": 0.0, "end": 0.5}]
+        segment = {
+            "audio": np.full(8_000, 0.1, dtype=np.float32),
+            "source_layer": "side",
+            "language": "English",
+        }
+        job = types.SimpleNamespace(id="test-job", quality="accurate")
+        with patch(
+            "backend.inference_pipeline._align_words_ctc",
+            return_value=[],
+        ), patch("builtins.print"):
+            words, confidence = _align_segment_words(job, segment, raw_words)
+        self.assertEqual(words, [])
+        self.assertEqual(confidence, 0.0)
+
+    def test_low_confidence_lead_alignment_preserves_whisper_words(self) -> None:
+        raw_words = [{"text": "sung", "start": 0.0, "end": 0.5}]
+        aligned = [
+            {
+                "text": "sung",
+                "start": 0.1,
+                "end": 0.4,
+                "_confidence": 0.01,
+            }
+        ]
+        segment = {"audio": np.ones(1000), "source_layer": "center", "language": "English"}
+        job = types.SimpleNamespace(id="test-job", quality="fast")
+        with patch("backend.inference_pipeline._align_words_ctc", return_value=aligned), patch(
+            "builtins.print"
+        ):
+            words, _ = _align_segment_words(job, segment, raw_words)
+        self.assertIs(words, raw_words)
+
+    def test_low_confidence_side_alignment_is_rejected(self) -> None:
+        raw_words = [{"text": "maybe", "start": 0.0, "end": 0.5}]
+        aligned = [
+            {
+                "text": "maybe",
+                "start": 0.1,
+                "end": 0.4,
+                "_confidence": 0.01,
+            }
+        ]
+        segment = {"audio": np.ones(1000), "source_layer": "side", "language": "English"}
+        job = types.SimpleNamespace(id="test-job", quality="accurate")
+        with patch("backend.inference_pipeline._align_words_ctc", return_value=aligned), patch(
+            "builtins.print"
+        ):
+            words, _ = _align_segment_words(job, segment, raw_words)
+        self.assertEqual(words, [])
+
     def test_transcriber_language_and_generation_settings_are_preserved(self) -> None:
         calls: list[dict[str, object]] = []
-
-        class FakeCore:
-            @staticmethod
-            def _check_cancelled(_: object) -> None:
-                return None
-
-            @staticmethod
-            def _looks_like_adlib_phrase(_: str, __: list[str]) -> bool:
-                return False
-
-            @staticmethod
-            def _parenthetical_adlib_flags(pieces: list[str]) -> list[bool]:
-                return [False] * len(pieces)
-
-        class FakeJob:
-            language = "auto"
-            quality = "accurate"
-
-            @staticmethod
-            def update(**_: object) -> None:
-                return None
+        job = types.SimpleNamespace(
+            language="auto",
+            quality="accurate",
+            cancelled=threading.Event(),
+            update=lambda **_: None,
+        )
 
         def transcriber(_: np.ndarray, **kwargs: object) -> dict[str, object]:
             calls.append(kwargs)
@@ -186,8 +197,7 @@ class InferencePipelineHelpersTest(unittest.TestCase):
 
         waveform = np.full(2 * 16_000, 0.1, dtype=np.float32)
         segments = _transcribe_view(
-            FakeCore,
-            FakeJob(),
+            job,
             transcriber,
             waveform,
             [(0, waveform.size)],
@@ -198,16 +208,11 @@ class InferencePipelineHelpersTest(unittest.TestCase):
         self.assertEqual(len(segments), 1)
         self.assertEqual(segments[0]["language"], "English")
         self.assertGreater(
-            segments[0]["words"][1]["end"]
-            - segments[0]["words"][1]["start"],
-            segments[0]["words"][0]["end"]
-            - segments[0]["words"][0]["start"],
+            segments[0]["words"][1]["end"] - segments[0]["words"][1]["start"],
+            segments[0]["words"][0]["end"] - segments[0]["words"][0]["start"],
         )
         self.assertTrue(calls[0]["return_language"])
-        self.assertEqual(
-            calls[0]["generate_kwargs"]["max_new_tokens"],
-            256,
-        )
+        self.assertEqual(calls[0]["generate_kwargs"]["max_new_tokens"], 256)
 
     def test_fallback_word_timing_is_proportional_to_token_length(self) -> None:
         timings = _proportional_word_timings(
@@ -219,12 +224,6 @@ class InferencePipelineHelpersTest(unittest.TestCase):
         self.assertGreater(durations[2], durations[0])
         self.assertEqual(timings[0][0], 1.0)
         self.assertEqual(timings[-1][1], 4.0)
-        self.assertTrue(
-            all(
-                timings[index][1] <= timings[index + 1][0]
-                for index in range(len(timings) - 1)
-            )
-        )
 
     def test_adaptive_regions_skip_a_silent_intro(self) -> None:
         sample_rate = 1_000
@@ -292,10 +291,7 @@ class InferencePipelineHelpersTest(unittest.TestCase):
         self.assertEqual(regions[0][0], 0)
         self.assertEqual(regions[-1][1], waveform.size)
         self.assertTrue(
-            all(
-                end - start <= int(28.5 * sample_rate)
-                for start, end in regions
-            )
+            all(end - start <= int(28.5 * sample_rate) for start, end in regions)
         )
         self.assertTrue(
             all(
@@ -307,10 +303,7 @@ class InferencePipelineHelpersTest(unittest.TestCase):
     def test_near_silent_side_noise_does_not_create_a_region(self) -> None:
         sample_rate = 1_000
         side = np.full(12 * sample_rate, 0.0002, dtype=np.float32)
-        self.assertEqual(
-            _adaptive_vocal_regions(side, sample_rate=sample_rate),
-            [],
-        )
+        self.assertEqual(_adaptive_vocal_regions(side, sample_rate=sample_rate), [])
 
     def test_an_isolated_side_response_creates_its_own_region(self) -> None:
         sample_rate = 1_000

@@ -12,6 +12,7 @@ Turn a local song into word-synced live lyrics without sending the audio off the
 - transcribes musical regions with multilingual Whisper and preserves its phrase boundaries
 - automatically applies English CTC alignment when Whisper detects English, even when the language control is set to Auto-detect
 - aligns English words and characters with Wav2Vec2 CTC, including pauses inside a sustained or split sung word
+- falls back to Whisper phrase timing instead of deleting lead lyrics when sung pronunciation produces weak CTC confidence
 - uses token-length-aware fallback timing instead of giving every word an equal share of a phrase
 - expands written numbers acoustically without changing the displayed lyrics
 - renders lead and secondary lyric lines with a direct audio-clock karaoke animation
@@ -23,23 +24,29 @@ The audio file stays on this computer. The first Accurate run downloads several 
 model files; Hugging Face and PyTorch cache them for later runs.
 
 Each transcription runs in a disposable, below-normal-priority GPU worker with a
-VRAM cap. When a job finishes or is cancelled, that process exits so Windows reclaims
-its model RAM and CUDA allocations instead of retaining them in the API server.
-Completed jobs can be restored from `.local-data` after an engine restart, including
-their isolated-vocal playback URL.
+configurable VRAM cap. When a job finishes or is cancelled, that process exits so the
+operating system reclaims its model RAM and CUDA allocations instead of retaining
+them in the API server. Completed jobs can be restored from `.local-data` after an
+engine restart, including their isolated-vocal playback URL.
 
 ## Run locally
 
-Requires Node.js 22.13+, Python 3.12, FFmpeg, and an NVIDIA GPU. On Windows:
+Requires Node.js 22.13+, Python 3.12, FFmpeg/ffprobe, and an NVIDIA GPU with a
+compatible CUDA runtime.
 
-```powershell
+```bash
 npm install
 npm run setup:engine
 npm run dev
 ```
 
+`npm run setup:engine` selects the PowerShell installer on Windows and the Bash
+installer on Linux. Set `LYRICWAVE_PYTHON` when Python 3.12 is not exposed under the
+usual launcher name.
+
 Open `http://localhost:3000`. `npm run dev` starts both the interface and the private
-inference API on `http://127.0.0.1:8008`.
+inference API on `http://127.0.0.1:8008`. The launcher terminates both process trees on
+Ctrl+C, including their Windows child processes.
 
 ## Processing modes
 
@@ -60,37 +67,54 @@ The Whisper checkpoints remain separate from alignment: Whisper determines the l
 text and phrase boundaries, then the CTC model tightens English word and character
 timing after Whisper has been released from GPU memory.
 
-The alignment checkpoint can be overridden without changing source code:
+## Runtime and model overrides
+
+Model checkpoints can be changed without editing source code. A mode-specific setting
+takes precedence over the shared setting.
 
 ```powershell
 $env:LYRICWAVE_ALIGNER_MODEL = "owner/model"
-$env:LYRICWAVE_FAST_ALIGNER_MODEL = "owner/fast-model"
-$env:LYRICWAVE_ACCURATE_ALIGNER_MODEL = "owner/accurate-model"
+$env:LYRICWAVE_ACCURATE_ALIGNER_MODEL = "owner/accurate-aligner"
+$env:LYRICWAVE_WHISPER_MODEL = "owner/whisper-compatible-model"
+$env:LYRICWAVE_FAST_WHISPER_MODEL = "owner/fast-whisper-model"
+$env:LYRICWAVE_DEMUCS_MODEL = "custom-demucs-model"
+$env:LYRICWAVE_VRAM_FRACTION = "0.75"
 npm run dev
 ```
 
-A mode-specific variable takes precedence over the shared variable. Custom models
-must expose a Wav2Vec2-compatible CTC alphabet containing English letters and a word
-delimiter.
+Custom transcription checkpoints must be compatible with Transformers'
+`AutoModelForSpeechSeq2Seq` Whisper timestamp path. Custom aligners must expose a
+Wav2Vec2-compatible CTC alphabet containing English letters and a word delimiter.
+`LYRICWAVE_VRAM_FRACTION` is clamped to the range `0.20`–`0.95`.
 
-## Model downloads and local data
+The setup scripts also accept `LYRICWAVE_TORCH_VERSION` and
+`LYRICWAVE_TORCH_INDEX_URL`, allowing the CUDA wheel to be updated independently of
+application code.
+
+## Local data and API safeguards
 
 This repository intentionally contains no model weights, songs, separated stems, or
-completed transcription jobs. The first transcription downloads the required model
-files into the normal Hugging Face and PyTorch caches on that computer. Local jobs
-stay under the ignored `.local-data` directory, and common audio and model-weight
-extensions are ignored as an additional guard against accidental commits.
+completed transcription jobs. Model files use the normal Hugging Face and PyTorch
+caches. Local jobs stay under the ignored `.local-data` directory and expire after 24
+hours.
+
+The engine validates processing mode, supported language, file extension, decoded
+audio duration, maximum size, and maximum duration before queuing GPU work. Invalid
+uploads are removed immediately. The API is bound to loopback, accepts browser origins
+from localhost only, and marks responses as non-cacheable.
 
 ## Verify
 
-```powershell
+```bash
+npm run lint
 npm run build
 npm run test:frontend
 npm run test:python
-npm test
+npm run check
 ```
 
-The Python test command discovers every `backend/test_*.py` module, including
-segmentation and model-selection regression tests. Model inference begins only after a
-user selects an audio file. The original mix is playable during processing, and the
-isolated vocal becomes selectable when ready.
+The Python test command discovers every `backend/test_*.py` module. The GitHub Actions
+workflow runs the frontend build/lint/tests and the GPU-free backend regression suite
+on each pull request and push to `main`. Model inference begins only after a user
+selects an audio file; CUDA model downloads and real-track inference remain local
+runtime checks.
