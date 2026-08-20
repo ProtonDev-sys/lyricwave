@@ -76,7 +76,9 @@ class JobState:
     device: str = ""
     transcription_backend: str = ""
     transcription_model: str = ""
+    transcription_model_id: str = ""
     alignment_model: str = ""
+    alignment_model_id: str = ""
     future: Future[Any] | None = field(default=None, repr=False)
     process: subprocess.Popen[str] | None = field(default=None, repr=False)
     cancelled: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -103,7 +105,9 @@ class JobState:
                     "error": self.error,
                     "transcription_backend": self.transcription_backend,
                     "transcription_model": self.transcription_model,
+                    "transcription_model_id": self.transcription_model_id,
                     "alignment_model": self.alignment_model,
+                    "alignment_model_id": self.alignment_model_id,
                 }
                 try:
                     write_json_atomic(self.progress_file, payload)
@@ -112,7 +116,10 @@ class JobState:
 
     def public(self, include_result: bool = True) -> dict[str, Any]:
         with self.lock:
+            configured_transcription = asr_model_id(self.quality)
             configured_alignment = alignment_model_id(self.quality)
+            actual_transcription_id = self.transcription_model_id or configured_transcription
+            actual_alignment_id = self.alignment_model_id or configured_alignment
             payload: dict[str, Any] = {
                 "id": self.id,
                 "filename": self.filename,
@@ -122,11 +129,15 @@ class JobState:
                 "error": self.error,
                 "duration": self.duration,
                 "quality": self.quality,
+                "language": self.language,
                 "device": self.device,
                 "separation_model": demucs_model_name(self.quality),
                 "transcription_backend": self.transcription_backend or asr_backend(self.quality),
-                "transcription_model": self.transcription_model or asr_model_id(self.quality).split("/")[-1],
-                "alignment_model": self.alignment_model or configured_alignment.split("/")[-1],
+                "transcription_model": self.transcription_model or actual_transcription_id.split("/")[-1],
+                "transcription_model_id": actual_transcription_id,
+                "alignment_model": self.alignment_model or actual_alignment_id.split("/")[-1],
+                "alignment_model_id": actual_alignment_id,
+                "alignment_model_requested": configured_alignment,
                 "created_at": self.created_at,
                 "vocal_url": f"/api/jobs/{self.id}/vocals" if self.vocal_path else None,
             }

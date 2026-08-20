@@ -101,7 +101,10 @@ def _load_qwen_aligner(job: Any) -> tuple[Any, Any]:
         _ALIGN_MODEL = model
         _ALIGN_PROCESSOR = processor
         _ALIGN_MODEL_ID = model_id
-        job.update(alignment_model=model_id.split("/")[-1])
+        job.update(
+            alignment_model=model_id.split("/")[-1],
+            alignment_model_id=model_id,
+        )
         return model, processor
 
 

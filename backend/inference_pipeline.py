@@ -190,7 +190,10 @@ def _align_segment_words(
     segment: dict[str, Any],
     raw_words: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], float]:
-    if alignment_backend(job.quality) == "qwen3":
+    configured_backend = alignment_backend(job.quality)
+    if configured_backend == "none":
+        return raw_words, 0.0
+    if configured_backend == "qwen3":
         try:
             aligned = align_words_qwen(
                 job,
@@ -328,12 +331,16 @@ def transcribe_vocals(job: JobState, vocal_path: Path) -> list[dict[str, Any]]:
         for index, segment in enumerate(segments):
             _check_cancelled(job)
             raw_words = list(segment["words"])
-            use_english_alignment = _segment_uses_english_alignment(
-                job.language,
-                segment.get("language"),
+            configured_alignment = alignment_backend(job.quality)
+            use_english_alignment = (
+                configured_alignment != "none"
+                and _segment_uses_english_alignment(
+                    job.language,
+                    segment.get("language"),
+                )
             )
             use_qwen_alignment = (
-                alignment_backend(job.quality) == "qwen3"
+                configured_alignment == "qwen3"
                 and qwen_alignment_language(
                     job.language, segment.get("language")
                 )

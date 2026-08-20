@@ -99,6 +99,24 @@ _LOCAL_ORIGIN_PATTERN = re.compile(
     r"https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?"
 )
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_WORKER_MODEL_FIELDS = (
+    "transcription_backend",
+    "transcription_model",
+    "transcription_model_id",
+    "alignment_model",
+    "alignment_model_id",
+)
+
+
+def _worker_model_updates(payload: object) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    updates: dict[str, str] = {}
+    for key in _WORKER_MODEL_FIELDS:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            updates[key] = value.strip()
+    return updates
 
 
 def _release_models() -> None:
@@ -476,6 +494,19 @@ def _restore_completed_job(job_id: str) -> JobState | None:
             words=words,
             lines=group_words_into_lines(words),
             device=str(metadata.get("device", "Local GPU")),
+            transcription_backend=str(result.get("transcription_backend") or ""),
+            transcription_model=str(result.get("transcription_model") or ""),
+            transcription_model_id=str(
+                result.get("transcription_model_id")
+                or result.get("transcription_model")
+                or ""
+            ),
+            alignment_model=str(result.get("alignment_model") or ""),
+            alignment_model_id=str(
+                result.get("alignment_model_id")
+                or result.get("alignment_model")
+                or ""
+            ),
         )
         vocal_candidates = list((work_dir / "separated").rglob("vocals.wav"))
         if vocal_candidates:
@@ -530,8 +561,8 @@ def _run_job(job: JobState) -> None:
         words = _transcribe_vocals_isolated(job, vocal_path)
         if not words:
             raise RuntimeError(
-                "Whisper could not find clear sung words. Try Accurate mode and "
-                "set the lyrics language explicitly."
+                "The selected transcription profile could not find clear sung words. "
+                "Try Best quality and set the lyrics language explicitly."
             )
         lines = group_words_into_lines(words)
         job.update(
@@ -758,6 +789,7 @@ def _transcribe_vocals_isolated(
                         for key in ("stage", "progress", "status", "error")
                         if key in progress
                     }
+                    updates.update(_worker_model_updates(progress))
                     if updates:
                         job.update(**updates)
                     last_progress_mtime = progress_mtime
@@ -794,6 +826,10 @@ def _transcribe_vocals_isolated(
             detail
             or f"The GPU worker exited with code {return_code} without returning a result."
         ) from error
+
+    model_updates = _worker_model_updates(result)
+    if model_updates:
+        job.update(**model_updates)
 
     if return_code != 0 or not result.get("ok"):
         raise RuntimeError(

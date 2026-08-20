@@ -28,7 +28,9 @@ def _model_metadata(job: JobState) -> dict[str, Any]:
     return {
         "transcription_backend": job.transcription_backend,
         "transcription_model": job.transcription_model,
+        "transcription_model_id": job.transcription_model_id,
         "alignment_model": job.alignment_model,
+        "alignment_model_id": job.alignment_model_id,
     }
 
 

@@ -31,16 +31,19 @@ def alignment_model_name() -> str:
     return _ALIGN_MODEL_ID.split("/")[-1]
 
 
-def _alignment_model_id(quality: str) -> str:
+def alignment_model_id(quality: str) -> str:
     mode = "accurate" if quality == "accurate" else "fast"
     mode_override = os.environ.get(f"LYRICWAVE_{mode.upper()}_ALIGNER_MODEL", "").strip()
     shared_override = os.environ.get("LYRICWAVE_ALIGNER_MODEL", "").strip()
     return mode_override or shared_override or _DEFAULT_ALIGNMENT_MODELS[mode]
 
 
+_alignment_model_id = alignment_model_id
+
+
 def _alignment_model_candidates(quality: str) -> list[str]:
     mode = "accurate" if quality == "accurate" else "fast"
-    requested = _alignment_model_id(mode)
+    requested = alignment_model_id(mode)
     return list(
         dict.fromkeys(
             (
@@ -75,7 +78,7 @@ def _load_ctc_aligner(job: Any) -> tuple[Any, Any]:
     import torch
     from transformers import AutoModelForCTC, AutoProcessor
 
-    requested_model_id = _alignment_model_id(job.quality)
+    requested_model_id = alignment_model_id(job.quality)
     candidates = _alignment_model_candidates(job.quality)
 
     def load(model_id: str) -> tuple[Any, Any]:
@@ -94,7 +97,10 @@ def _load_ctc_aligner(job: Any) -> tuple[Any, Any]:
         _ALIGN_MODEL = model
         _ALIGN_MODEL_ID = model_id
         _ALIGN_REQUEST_ID = requested_model_id
-        job.update(alignment_model=model_id.split("/")[-1])
+        job.update(
+            alignment_model=model_id.split("/")[-1],
+            alignment_model_id=model_id,
+        )
         return model, processor
 
     with _ALIGN_LOCK:

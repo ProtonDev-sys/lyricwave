@@ -44,6 +44,7 @@ import {
   LocalEngineRequestError,
   withRefreshedRequestToken,
 } from "./local-engine.js";
+import { buildTimingExport } from "./lyric-export.js";
 import { wordFillAt } from "./lyric-timing.js";
 type QualityPreset = "fast" | "balanced" | "accurate";
 
@@ -96,9 +97,16 @@ type BackendJob = {
   vocal_url?: string | null;
   words?: TimedWord[];
   lines?: LyricLine[];
+  quality?: QualityPreset;
+  language?: string;
+  created_at?: string;
   separation_model?: string;
+  transcription_backend?: string;
   transcription_model?: string;
+  transcription_model_id?: string;
   alignment_model?: string;
+  alignment_model_id?: string;
+  alignment_model_requested?: string;
 };
 
 type BackendModelProfile = {
@@ -109,6 +117,19 @@ type BackendModelProfile = {
   transcription_model: string;
   alignment_model: string;
   side_pass: boolean;
+};
+
+type ProcessingMetadata = {
+  jobId: string;
+  createdAt: string | null;
+  quality: QualityPreset;
+  languageSetting: string;
+  device: string | null;
+  separationModel: string | null;
+  transcriptionBackend: string | null;
+  transcriptionModel: string | null;
+  alignmentModel: string | null;
+  alignmentModelRequested: string | null;
 };
 
 type BackendHealth = {
@@ -498,6 +519,9 @@ export default function Home() {
   );
   const [engineHealth, setEngineHealth] = useState<BackendHealth | null>(null);
   const [engineDetail, setEngineDetail] = useState("");
+  const [processingMetadata, setProcessingMetadata] = useState<ProcessingMetadata | null>(
+    null,
+  );
   const [focusedLineIndex, setFocusedLineIndex] = useState(-1);
 
   const modelProfiles =
@@ -852,6 +876,7 @@ export default function Home() {
       setError("");
       setLines([]);
       setEngineDetail("");
+      setProcessingMetadata(null);
       setStage("uploading");
       setStatus("Uploading audio to the local engine");
       setProgress(1);
@@ -946,6 +971,20 @@ export default function Home() {
             if (!lyricLines.length) {
               throw new Error("The selected transcription model did not return timed lyric lines.");
             }
+            setProcessingMetadata({
+              jobId: job.id,
+              createdAt: job.created_at ?? null,
+              quality: job.quality ?? quality,
+              languageSetting: job.language ?? language,
+              device: job.device ?? null,
+              separationModel: job.separation_model ?? null,
+              transcriptionBackend: job.transcription_backend ?? null,
+              transcriptionModel:
+                job.transcription_model_id ?? job.transcription_model ?? null,
+              alignmentModel:
+                job.alignment_model_id ?? job.alignment_model ?? null,
+              alignmentModelRequested: job.alignment_model_requested ?? null,
+            });
             setLines(lyricLines);
             setProgress(100);
             setStatus(`${timedWords.length} words synced locally`);
@@ -1004,6 +1043,7 @@ export default function Home() {
       setTrack(parsed);
       setOriginalUrl(nextOriginalUrl);
       setVocalUrl("");
+      setProcessingMetadata(null);
       setPlaybackMode("mix");
       setCurrentTime(0);
       setDuration(0);
@@ -1062,6 +1102,7 @@ export default function Home() {
     setStatus("Ready");
     setProgress(0);
     setLines([]);
+    setProcessingMetadata(null);
     setOriginalUrl("");
     setVocalUrl("");
     setCurrentTime(0);
@@ -1154,13 +1195,13 @@ export default function Home() {
     if (!lines.length) return;
     const safeTitle = track.title.replace(/[^a-z0-9-_]+/gi, "-").replace(/^-|-$/g, "");
     if (kind === "json") {
-      const payload = {
+      const payload = buildTimingExport({
         title: track.title,
         artist: track.artist,
         duration,
-        generatedOnDevice: true,
+        processing: processingMetadata,
         lines,
-      };
+      });
       downloadBlob(
         new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
         `${safeTitle || "lyrics"}-word-timings.json`,
@@ -1244,7 +1285,7 @@ export default function Home() {
             </div>
           )}
           {file && (
-            <button className="header-icon" type="button" onClick={reset} aria-label="Load another song">
+            <button className="header-icon" type="button" onClick={reset} aria-label="Load another audio file">
               <RotateCcw size={16} />
             </button>
           )}
@@ -1279,7 +1320,7 @@ export default function Home() {
                 <strong>{dragging ? "Release to select" : "Drop audio file"}</strong>
                 <span>MP3, WAV, FLAC, M4A, AAC, OGG, WebM · up to 500 MB</span>
                 <button className="primary-button" type="button" onClick={() => inputRef.current?.click()}>
-                  Choose a song
+                  Choose audio
                 </button>
               </div>
 
@@ -1423,7 +1464,7 @@ export default function Home() {
           )}
         </aside>
 
-        <section className="lyrics-stage" ref={lyricsRef} aria-label="Live lyrics">
+        <section className="lyrics-stage" ref={lyricsRef} aria-label="Lyrics">
           <div className="lyrics-toolbar">
             <div className="lyrics-status">
               <span className={`live-dot ${isPlaying ? "is-live" : ""}`} />

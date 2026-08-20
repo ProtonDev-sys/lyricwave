@@ -155,6 +155,7 @@ def load_whisper_pipeline(job: Any) -> Any:
                 status=f"Using {requested_model_id.split('/')[-1]} on the GPU",
                 transcription_backend=requested_backend,
                 transcription_model=requested_model_id.split("/")[-1],
+                transcription_model_id=requested_model_id,
             )
             return _ASR_PIPELINE
 
@@ -193,6 +194,7 @@ def load_whisper_pipeline(job: Any) -> Any:
         job.update(
             transcription_backend=actual_backend,
             transcription_model=actual_model_id.split("/")[-1],
+            transcription_model_id=actual_model_id,
         )
         return _ASR_PIPELINE
 

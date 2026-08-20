@@ -165,7 +165,9 @@ npm run benchmark:lyrics -- reference.json candidate.json --json
 ```
 
 Reference and candidate files may use lyricwave's exported `lines` structure or a
-top-level `words` array. Text-only references still produce WER/CER; timing metrics are
+top-level `words` array. Timing exports include the selected profile, language, device,
+Demucs model, actual transcription backend/model, actual alignment model, and requested
+alignment checkpoint. Text-only references still produce WER/CER; timing metrics are
 calculated only for exact aligned words where both files contain start and end times.
 This makes model or threshold changes measurable on a representative private corpus
 without committing any songs, lyrics, or generated outputs.
