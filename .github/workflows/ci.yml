@@ -24,6 +24,7 @@ jobs:
       - run: npm ci
       - run: npm run audit:production
       - run: npm run lint
+      - run: npm run typecheck
       - run: npm run build
       - run: npm run test:frontend
 
@@ -39,4 +40,4 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r backend/requirements-test.txt
       - run: python -m compileall -q backend
-      - run: python -m unittest discover -s backend -v
+      - run: python -m unittest backend -v
