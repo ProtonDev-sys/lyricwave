@@ -70,6 +70,10 @@ from backend.model_runtime import (
     load_whisper_pipeline as _load_whisper_pipeline,
     release_whisper_model as _release_whisper_model,
 )
+from backend.process_control import (
+    terminate_process_tree as _terminate_process,
+    worker_process_options,
+)
 from backend.upload_limits import JobUploadSizeLimitMiddleware
 
 
@@ -255,40 +259,6 @@ def _worker_environment() -> dict[str, str]:
         }
     )
     return environment
-
-
-def _worker_creation_flags() -> int:
-    if os.name != "nt":
-        return 0
-    return subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS
-
-
-def _terminate_process(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                capture_output=True,
-                check=False,
-                timeout=12,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-            process.wait(timeout=3)
-            return
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-    try:
-        process.terminate()
-        process.wait(timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
-        try:
-            process.kill()
-            process.wait(timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
@@ -641,7 +611,7 @@ def _separate_vocals(job: JobState) -> Path:
         errors="replace",
         bufsize=0,
         env=environment,
-        creationflags=_worker_creation_flags(),
+        **worker_process_options(),
     )
     job.update(process=process)
 
@@ -760,7 +730,7 @@ def _transcribe_vocals_isolated(
             stderr=subprocess.STDOUT,
             text=True,
             env=_worker_environment(),
-            creationflags=_worker_creation_flags(),
+            **worker_process_options(),
         )
         job.update(process=process)
         last_progress_mtime = -1
