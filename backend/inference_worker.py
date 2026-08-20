@@ -6,7 +6,9 @@ import sys
 import traceback
 from pathlib import Path
 
-from backend.server import JobState, _release_models, _transcribe_vocals, _write_json_atomic
+from backend.ctc_alignment import release_alignment_model
+from backend.inference_pipeline import transcribe_vocals
+from backend.server import JobState, _release_models, _write_json_atomic
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -56,7 +58,7 @@ def main() -> int:
     job.update()
 
     try:
-        words = _transcribe_vocals(job, vocal_path)
+        words = transcribe_vocals(job, vocal_path)
         _write_json(result_path, {"ok": True, "words": words})
         return 0
     except Exception as error:
@@ -66,6 +68,7 @@ def main() -> int:
         _write_json(result_path, {"ok": False, "error": message})
         return 1
     finally:
+        release_alignment_model()
         _release_models()
 
 
