@@ -123,8 +123,10 @@ The single-GPU queue is reserved in middleware before FastAPI parses or spools m
 upload data. By default it accepts two pending items in total—uploads, queued jobs, and
 active jobs—and returns HTTP 429 with `Retry-After` when full. Cancelling a job that has
 not reached the GPU removes its executor future immediately, so stopped tracks cannot
-remain ahead of later work. This prevents multiple browser tabs or clients from building
-an unbounded backlog of large local files.
+remain ahead of later work. If an upload response arrives after the interface has already
+switched tracks, that exact superseded job is cancelled instead of becoming hidden queue work.
+This prevents multiple browser tabs or clients from building an unbounded backlog of large
+local files.
 
 The engine validates processing mode, supported language, file extension, decoded
 audio duration, maximum size, and maximum duration before queuing GPU work. Invalid
