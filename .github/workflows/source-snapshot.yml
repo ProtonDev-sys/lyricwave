@@ -1,0 +1,28 @@
+name: Source snapshot
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyricwave-source
+          path: |
+            app
+            backend
+            scripts
+            tests
+            .github
+            package.json
+            package-lock.json
+            tsconfig.json
+            eslint.config.mjs
+          if-no-files-found: error
+          retention-days: 1
