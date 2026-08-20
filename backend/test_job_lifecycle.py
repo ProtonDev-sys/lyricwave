@@ -4,7 +4,9 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import Future
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from fastapi import Request
@@ -66,6 +68,18 @@ class JobLifecycleTest(unittest.TestCase):
                 with self.assertRaises(JobQueueFull):
                     with lifecycle.reserve(root):
                         self.fail("A second upload should not receive a queue slot.")
+            self.assertEqual(lifecycle.busy_count(), 0)
+
+    def test_terminal_job_with_a_live_future_remains_busy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = self._job(root, "d" * 32, "cancelled")
+            future: Future[Any] = Future()
+            job.future = future
+            lifecycle = JobLifecycle({job.id: job}, threading.RLock())
+
+            self.assertEqual(lifecycle.busy_count(), 1)
+            future.cancel()
             self.assertEqual(lifecycle.busy_count(), 0)
 
     def test_cleanup_removes_only_expired_terminal_jobs(self) -> None:
