@@ -80,10 +80,11 @@ class JobLifecycle:
     @staticmethod
     def _job_is_busy(job: JobState) -> bool:
         with job.lock:
+            future = job.future
             process = job.process
-            return job.stage not in TERMINAL_STAGES or bool(
-                process is not None and process.poll() is None
-            )
+            future_pending = future is not None and not future.done()
+            process_running = process is not None and process.poll() is None
+            return job.stage not in TERMINAL_STAGES or future_pending or process_running
 
     def busy_count(self) -> int:
         """Count active jobs plus upload slots reserved before registration."""
