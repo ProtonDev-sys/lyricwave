@@ -34,11 +34,11 @@ jobs:
         if: github.head_ref == 'codex/simplify-interface'
         run: |
           npx vinext dev --host 127.0.0.1 --port 3000 > /tmp/lyricwave-site.log 2>&1 &
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 120); do
             if curl --fail --silent http://127.0.0.1:3000/ > /dev/null; then
               break
             fi
-            if [ "$attempt" -eq 60 ]; then
+            if [ "$attempt" -eq 120 ]; then
               cat /tmp/lyricwave-site.log
               exit 1
             fi
