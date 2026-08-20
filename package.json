@@ -16,6 +16,7 @@
     "test:frontend": "node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs tests/lyric-timeline.test.mjs tests/local-engine.test.mjs",
     "test:python": "node scripts/run-python.mjs -m unittest backend -v",
     "test": "npm run build && npm run test:frontend && npm run test:python",
+    "benchmark:lyrics": "node scripts/run-python.mjs scripts/evaluate-lyrics.py",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .venv --ignore-pattern .local-data",
     "check": "npm run lint && npm run typecheck && npm run test",
     "audit:production": "npm audit --omit=dev --audit-level=high"
