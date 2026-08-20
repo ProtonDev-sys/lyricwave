@@ -37,6 +37,11 @@ from backend.config import (
 )
 from backend.ctc_alignment import release_alignment_model
 from backend.inference_regions import _adaptive_vocal_regions
+from backend.job_lifecycle import (
+    JobLifecycle,
+    JobQueueFull,
+    max_pending_jobs,
+)
 from backend.job_state import JobCancelled, JobState, write_json_atomic
 from backend.lyric_processing import (
     COMMON_HALLUCINATION_PATTERNS,
@@ -69,6 +74,7 @@ JOB_ROOT.mkdir(parents=True, exist_ok=True)
 JOBS: dict[str, JobState] = {}
 JOBS_LOCK = threading.RLock()
 EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lyricwave-gpu")
+JOB_LIFECYCLE = JobLifecycle(JOBS, JOBS_LOCK)
 _RUNTIME_CACHE: tuple[float, dict[str, Any]] | None = None
 _RUNTIME_LOCK = threading.RLock()
 
@@ -78,24 +84,8 @@ def _release_models() -> None:
     release_alignment_model()
 
 
-def _cleanup_old_jobs() -> None:
-    cutoff = time.time() - 24 * 60 * 60
-    if not JOB_ROOT.exists():
-        return
-    with JOBS_LOCK:
-        active_ids = {
-            job_id for job_id, job in JOBS.items() if job.stage not in TERMINAL_STAGES
-        }
-    for directory in JOB_ROOT.iterdir():
-        try:
-            if (
-                directory.name not in active_ids
-                and directory.is_dir()
-                and directory.stat().st_mtime < cutoff
-            ):
-                shutil.rmtree(directory, ignore_errors=True)
-        except OSError:
-            continue
+def _cleanup_old_jobs() -> int:
+    return JOB_LIFECYCLE.cleanup(JOB_ROOT, force=True)
 
 
 def _shutdown_jobs() -> None:
@@ -244,7 +234,14 @@ def _terminate_process(process: subprocess.Popen[str]) -> None:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "service": "lyricwave-local", **_runtime_info()}
+    JOB_LIFECYCLE.cleanup(JOB_ROOT)
+    return {
+        "ok": True,
+        "service": "lyricwave-local",
+        "pending_jobs": JOB_LIFECYCLE.busy_count(),
+        "queue_capacity": max_pending_jobs(),
+        **_runtime_info(),
+    }
 
 
 @app.post("/api/jobs", status_code=202)
@@ -253,93 +250,105 @@ async def create_job(
     language: str = Form("auto"),
     quality: str = Form("fast"),
 ) -> dict[str, Any]:
-    runtime = _runtime_info()
-    if not runtime["ready"]:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The local GPU engine is not ready. Run npm run setup:engine, "
-                "then restart npm run dev."
-            ),
-        )
     try:
-        quality = normalise_quality(quality)
-        language = normalise_language(language)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
-    original_name = Path(file.filename or "track").name
-    extension = Path(original_name).suffix.lower()
-    if extension not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=415, detail="Choose a supported audio file.")
-
-    job_id = uuid.uuid4().hex
-    work_dir = JOB_ROOT / job_id
-    work_dir.mkdir(parents=True, exist_ok=False)
-    source_path = work_dir / f"source{extension}"
-    size = 0
-    try:
-        with source_path.open("wb") as destination:
-            while chunk := await file.read(1024 * 1024):
-                size += len(chunk)
-                if size > MAX_FILE_SIZE:
-                    raise HTTPException(
-                        status_code=413,
-                        detail="Audio files are limited to 500 MB.",
-                    )
-                destination.write(chunk)
-        if size == 0:
-            raise HTTPException(status_code=400, detail="The selected audio file is empty.")
-        duration = _probe_duration(source_path)
-        if duration > MAX_DURATION_SECONDS:
+        runtime = _runtime_info()
+        if not runtime["ready"]:
             raise HTTPException(
-                status_code=413,
-                detail="Audio duration is limited to three hours.",
+                status_code=503,
+                detail=(
+                    "The local GPU engine is not ready. Run npm run setup:engine, "
+                    "then restart npm run dev."
+                ),
             )
-    except HTTPException:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        raise
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        raise HTTPException(
-            status_code=400,
-            detail="The selected file could not be decoded as supported audio.",
-        ) from error
+        try:
+            quality = normalise_quality(quality)
+            language = normalise_language(language)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+        original_name = Path(file.filename or "track").name
+        extension = Path(original_name).suffix.lower()
+        if extension not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=415, detail="Choose a supported audio file.")
+
+        try:
+            with JOB_LIFECYCLE.reserve(JOB_ROOT):
+                job_id = uuid.uuid4().hex
+                work_dir = JOB_ROOT / job_id
+                work_dir.mkdir(parents=True, exist_ok=False)
+                source_path = work_dir / f"source{extension}"
+                size = 0
+                try:
+                    with source_path.open("wb") as destination:
+                        while chunk := await file.read(1024 * 1024):
+                            size += len(chunk)
+                            if size > MAX_FILE_SIZE:
+                                raise HTTPException(
+                                    status_code=413,
+                                    detail="Audio files are limited to 500 MB.",
+                                )
+                            destination.write(chunk)
+                    if size == 0:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="The selected audio file is empty.",
+                        )
+                    duration = _probe_duration(source_path)
+                    if duration > MAX_DURATION_SECONDS:
+                        raise HTTPException(
+                            status_code=413,
+                            detail="Audio duration is limited to three hours.",
+                        )
+                except HTTPException:
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                    raise
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                    raise HTTPException(
+                        status_code=400,
+                        detail="The selected file could not be decoded as supported audio.",
+                    ) from error
+
+                job = JobState(
+                    id=job_id,
+                    filename=original_name,
+                    source_path=source_path,
+                    work_dir=work_dir,
+                    language=language,
+                    quality=quality,
+                    duration=duration,
+                    device=str(runtime["device"]),
+                )
+                try:
+                    write_json_atomic(
+                        work_dir / "job.json",
+                        {
+                            "schema": 2,
+                            "filename": original_name,
+                            "language": language,
+                            "quality": quality,
+                            "duration": duration,
+                            "device": str(runtime["device"]),
+                            "created_at": job.created_at,
+                        },
+                    )
+                    with JOBS_LOCK:
+                        JOBS[job_id] = job
+                    EXECUTOR.submit(_run_job, job)
+                except Exception:
+                    with JOBS_LOCK:
+                        JOBS.pop(job_id, None)
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                    raise
+                return job.public(include_result=False)
+        except JobQueueFull as error:
+            raise HTTPException(
+                status_code=429,
+                detail=str(error),
+                headers={"Retry-After": str(error.retry_after_seconds)},
+            ) from error
     finally:
         await file.close()
-
-    job = JobState(
-        id=job_id,
-        filename=original_name,
-        source_path=source_path,
-        work_dir=work_dir,
-        language=language,
-        quality=quality,
-        duration=duration,
-        device=str(runtime["device"]),
-    )
-    try:
-        write_json_atomic(
-            work_dir / "job.json",
-            {
-                "schema": 2,
-                "filename": original_name,
-                "language": language,
-                "quality": quality,
-                "duration": duration,
-                "device": str(runtime["device"]),
-                "created_at": job.created_at,
-            },
-        )
-        with JOBS_LOCK:
-            JOBS[job_id] = job
-        EXECUTOR.submit(_run_job, job)
-    except Exception:
-        with JOBS_LOCK:
-            JOBS.pop(job_id, None)
-        shutil.rmtree(work_dir, ignore_errors=True)
-        raise
-    return job.public(include_result=False)
 
 
 @app.get("/api/jobs/{job_id}")
