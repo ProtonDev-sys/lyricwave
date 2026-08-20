@@ -5,12 +5,14 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
-from backend.config import cpu_thread_count
+from backend.config import PRESETS, cpu_thread_count
 from backend.ctc_alignment import release_alignment_model
 from backend.inference_pipeline import transcribe_vocals
 from backend.job_state import JobState, write_json_atomic
 from backend.model_runtime import release_whisper_model
+from backend.qwen_alignment import release_qwen_alignment_model
 
 
 def _vram_fraction() -> float:
@@ -22,13 +24,23 @@ def _vram_fraction() -> float:
     return max(0.20, min(0.95, value))
 
 
+def _model_metadata(job: JobState) -> dict[str, Any]:
+    return {
+        "transcription_backend": job.transcription_backend,
+        "transcription_model": job.transcription_model,
+        "transcription_model_id": job.transcription_model_id,
+        "alignment_model": job.alignment_model,
+        "alignment_model_id": job.alignment_model_id,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Disposable lyricwave GPU inference worker")
     parser.add_argument("--vocal", required=True)
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--filename", required=True)
     parser.add_argument("--language", required=True)
-    parser.add_argument("--quality", choices=("accurate", "fast"), required=True)
+    parser.add_argument("--quality", choices=tuple(PRESETS), required=True)
     parser.add_argument("--duration", type=float, required=True)
     parser.add_argument("--progress", required=True)
     parser.add_argument("--result", required=True)
@@ -65,16 +77,23 @@ def main() -> int:
         torch.cuda.set_per_process_memory_fraction(_vram_fraction(), device=0)
 
         words = transcribe_vocals(job, vocal_path)
-        write_json_atomic(result_path, {"ok": True, "words": words})
+        write_json_atomic(
+            result_path,
+            {"ok": True, "words": words, **_model_metadata(job)},
+        )
         return 0
     except Exception as error:
         traceback.print_exc()
         message = str(error).strip() or error.__class__.__name__
         job.update(stage="error", status="Processing stopped", error=message)
-        write_json_atomic(result_path, {"ok": False, "error": message})
+        write_json_atomic(
+            result_path,
+            {"ok": False, "error": message, **_model_metadata(job)},
+        )
         return 1
     finally:
         release_alignment_model()
+        release_qwen_alignment_model()
         release_whisper_model()
 
 

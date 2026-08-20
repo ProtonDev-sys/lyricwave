@@ -38,7 +38,6 @@ def alignment_model_id(quality: str) -> str:
     return mode_override or shared_override or _DEFAULT_ALIGNMENT_MODELS[mode]
 
 
-# Retain the private alias for existing local integrations and tests.
 _alignment_model_id = alignment_model_id
 
 
@@ -98,6 +97,10 @@ def _load_ctc_aligner(job: Any) -> tuple[Any, Any]:
         _ALIGN_MODEL = model
         _ALIGN_MODEL_ID = model_id
         _ALIGN_REQUEST_ID = requested_model_id
+        job.update(
+            alignment_model=model_id.split("/")[-1],
+            alignment_model_id=model_id,
+        )
         return model, processor
 
     with _ALIGN_LOCK:

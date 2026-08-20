@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from backend.config import alignment_backend, side_pass_enabled
 from backend.ctc_alignment import (
     _align_words_ctc,
     _alignment_coverage,
@@ -36,6 +37,12 @@ from backend.model_runtime import (
     decode_mono,
     load_whisper_pipeline,
     release_whisper_model,
+)
+from backend.qwen_alignment import (
+    align_words_qwen,
+    qwen_alignment_language,
+    qwen_alignment_model_name,
+    release_qwen_alignment_model,
 )
 
 
@@ -183,6 +190,32 @@ def _align_segment_words(
     segment: dict[str, Any],
     raw_words: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], float]:
+    configured_backend = alignment_backend(job.quality)
+    if configured_backend == "none":
+        return raw_words, 0.0
+    if configured_backend == "qwen3":
+        try:
+            aligned = align_words_qwen(
+                job,
+                segment["audio"],
+                raw_words,
+                segment.get("language"),
+            )
+            if aligned:
+                job.update(alignment_model=qwen_alignment_model_name())
+                return aligned, 1.0
+        except Exception as qwen_error:
+            print(
+                f"[align:{job.id[:8]}] Qwen alignment unavailable: {qwen_error}",
+                flush=True,
+            )
+        if segment["source_layer"] == "side":
+            return [], 0.0
+        if not _segment_uses_english_alignment(
+            job.language, segment.get("language")
+        ):
+            return raw_words, 0.0
+
     try:
         aligned = _align_words_ctc(job, segment["audio"], raw_words)
         if not aligned:
@@ -248,7 +281,7 @@ def transcribe_vocals(job: JobState, vocal_path: Path) -> list[dict[str, Any]]:
     transcriber = load_whisper_pipeline(job)
     _check_cancelled(job)
 
-    use_side_pass = job.quality == "accurate"
+    use_side_pass = side_pass_enabled(job.quality)
     regions = _adaptive_vocal_regions(waveform)
     if not regions:
         release_whisper_model()
@@ -298,17 +331,29 @@ def transcribe_vocals(job: JobState, vocal_path: Path) -> list[dict[str, Any]]:
         for index, segment in enumerate(segments):
             _check_cancelled(job)
             raw_words = list(segment["words"])
-            use_english_alignment = _segment_uses_english_alignment(
-                job.language,
-                segment.get("language"),
+            configured_alignment = alignment_backend(job.quality)
+            use_english_alignment = (
+                configured_alignment != "none"
+                and _segment_uses_english_alignment(
+                    job.language,
+                    segment.get("language"),
+                )
             )
-            local_words = raw_words if not use_english_alignment else []
-            segment_confidence = 1.0 if not use_english_alignment else 0.0
+            use_qwen_alignment = (
+                configured_alignment == "qwen3"
+                and qwen_alignment_language(
+                    job.language, segment.get("language")
+                )
+                is not None
+            )
+            needs_alignment = use_qwen_alignment or use_english_alignment
+            local_words = raw_words if not needs_alignment else []
+            segment_confidence = 1.0 if not needs_alignment else 0.0
 
-            if use_english_alignment and raw_words:
+            if needs_alignment and raw_words:
                 job.update(
                     progress=88.0 + (index / max(1, len(segments))) * 9.0,
-                    status=f"Tightening phrase {index + 1}/{len(segments)}",
+                    status=f"Aligning phrase {index + 1}/{len(segments)}",
                 )
                 local_words, segment_confidence = _align_segment_words(
                     job,
@@ -369,6 +414,7 @@ def transcribe_vocals(job: JobState, vocal_path: Path) -> list[dict[str, Any]]:
                 )
     finally:
         release_alignment_model()
+        release_qwen_alignment_model()
 
     job.update(progress=98.0, status="Polishing word timings")
     lead_words = [word for word in words if str(word.get("_kind")) == "lead"]
