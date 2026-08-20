@@ -67,6 +67,21 @@ The Whisper checkpoints remain separate from alignment: Whisper determines the l
 text and phrase boundaries, then the CTC model tightens English word and character
 timing after Whisper has been released from GPU memory.
 
+## Frontend runtime
+
+Completed lyric results are indexed once with cumulative word offsets and prefix
+maximum interval ends. During playback, active words and lines are found with binary
+search plus a bounded overlap walk instead of scanning the entire song on every
+animation frame. The lyric-line tree is memoized, and visual active/past state is
+updated directly on the relevant elements so the player clock does not rebuild every
+word ten times per second.
+
+Transient localhost polling failures, timeouts, rate limits, and server-side 5xx
+responses use capped exponential backoff. An expensive GPU job therefore continues
+through a brief browser-to-engine interruption instead of being cancelled immediately.
+Playback-source changes attach their metadata and error handlers before loading the
+new source, and blocked automatic resume is surfaced to the user.
+
 ## Runtime and model overrides
 
 Model checkpoints can be changed without editing source code. A mode-specific setting
@@ -106,6 +121,7 @@ from localhost only, and marks responses as non-cacheable.
 ## Verify
 
 ```bash
+npm run audit:production
 npm run lint
 npm run build
 npm run test:frontend
@@ -114,7 +130,7 @@ npm run check
 ```
 
 The Python test command discovers every `backend/test_*.py` module. The GitHub Actions
-workflow runs the frontend build/lint/tests and the GPU-free backend regression suite
-on each pull request and push to `main`. Model inference begins only after a user
-selects an audio file; CUDA model downloads and real-track inference remain local
-runtime checks.
+workflow runs a high-severity production dependency audit, frontend build/lint/tests,
+and the GPU-free backend regression suite on each pull request and push to `main`.
+Model inference begins only after a user selects an audio file; CUDA model downloads
+and real-track inference remain local runtime checks.
