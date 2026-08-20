@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.config import demucs_model_name, normalise_quality, whisper_model_id
+from backend.ctc_alignment import alignment_model_id
 
 
 class JobCancelled(RuntimeError):
@@ -110,9 +111,12 @@ class JobState:
                 "error": self.error,
                 "duration": self.duration,
                 "quality": self.quality,
+                "language": self.language,
                 "device": self.device,
                 "separation_model": demucs_model_name(self.quality),
                 "transcription_model": whisper_model_id(self.quality).split("/")[-1],
+                "transcription_model_id": whisper_model_id(self.quality),
+                "alignment_model_requested": alignment_model_id(self.quality),
                 "created_at": self.created_at,
                 "vocal_url": f"/api/jobs/{self.id}/vocals" if self.vocal_path else None,
             }
