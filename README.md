@@ -96,6 +96,7 @@ $env:LYRICWAVE_WHISPER_MODEL = "owner/whisper-compatible-model"
 $env:LYRICWAVE_FAST_WHISPER_MODEL = "owner/fast-whisper-model"
 $env:LYRICWAVE_DEMUCS_MODEL = "custom-demucs-model"
 $env:LYRICWAVE_VRAM_FRACTION = "0.75"
+$env:LYRICWAVE_CPU_THREADS = "8"
 $env:LYRICWAVE_MAX_PENDING_JOBS = "2"
 $env:LYRICWAVE_JOB_RETENTION_HOURS = "24"
 $env:LYRICWAVE_CLEANUP_INTERVAL_SECONDS = "900"
@@ -105,9 +106,11 @@ npm run dev
 Custom transcription checkpoints must be compatible with Transformers'
 `AutoModelForSpeechSeq2Seq` Whisper timestamp path. Custom aligners must expose a
 Wav2Vec2-compatible CTC alphabet containing English letters and a word delimiter.
-`LYRICWAVE_VRAM_FRACTION` is clamped to the range `0.20`–`0.95`. Queue capacity is
-clamped to 1–16 jobs, retention to 1–720 hours, and cleanup frequency to
-30–21,600 seconds.
+`LYRICWAVE_VRAM_FRACTION` is clamped to the range `0.20`–`0.95`.
+`LYRICWAVE_CPU_THREADS` is parsed once for native math libraries and PyTorch, defaults
+to at most eight available logical CPUs, and is clamped to 1–32 without exceeding the
+reported machine capacity. Queue capacity is clamped to 1–16 jobs, retention to 1–720
+hours, and cleanup frequency to 30–21,600 seconds.
 
 The setup scripts also accept `LYRICWAVE_TORCH_VERSION` and
 `LYRICWAVE_TORCH_INDEX_URL`, allowing the CUDA wheel to be updated independently of
