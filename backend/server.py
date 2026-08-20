@@ -70,6 +70,7 @@ from backend.model_runtime import (
     load_whisper_pipeline as _load_whisper_pipeline,
     release_whisper_model as _release_whisper_model,
 )
+from backend.upload_limits import JobUploadSizeLimitMiddleware
 
 
 # Compatibility aliases for the existing test suite and local scripts. The
@@ -125,6 +126,7 @@ app = FastAPI(
     version="0.3.0",
     lifespan=lifespan,
 )
+app.add_middleware(JobUploadSizeLimitMiddleware)
 
 
 @app.middleware("http")
