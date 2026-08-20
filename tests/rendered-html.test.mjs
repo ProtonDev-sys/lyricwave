@@ -56,6 +56,11 @@ test("uses the modular localhost inference engine and word-level results", async
   assert.match(page, /X-Lyricwave-Token/);
   assert.match(page, /request_token/);
   assert.match(page, /withRefreshedRequestToken/);
+  assert.match(page, /const cancelJobById = useCallback/);
+  const staleCancellationIndex = page.indexOf("void cancelJobById(created.id)");
+  const activeRegistrationIndex = page.indexOf("activeJobRef.current = created.id");
+  assert.ok(staleCancellationIndex >= 0);
+  assert.ok(activeRegistrationIndex > staleCancellationIndex);
   assert.match(page, /visibilitychange/);
   assert.match(localEngine, /refreshedToken === activeToken/);
   assert.match(page, /URL\.createObjectURL/);

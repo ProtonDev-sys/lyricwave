@@ -643,23 +643,25 @@ export default function Home() {
     };
   }, [checkEngine]);
 
+  const cancelJobById = useCallback(async (jobId: string) => {
+    await withRefreshedRequestToken({
+      token: requestTokenRef.current,
+      refreshToken: async () => {
+        const health = await readEngineHealth();
+        requestTokenRef.current = health.request_token;
+        return health.request_token;
+      },
+      request: (requestToken) => cancelLocalJob(jobId, requestToken),
+    });
+  }, []);
+
   const cancelCurrentJob = useCallback(() => {
     uploadRequestRef.current?.abort();
     uploadRequestRef.current = null;
     const jobId = activeJobRef.current;
     activeJobRef.current = null;
-    if (jobId) {
-      void withRefreshedRequestToken({
-        token: requestTokenRef.current,
-        refreshToken: async () => {
-          const health = await readEngineHealth();
-          requestTokenRef.current = health.request_token;
-          return health.request_token;
-        },
-        request: (requestToken) => cancelLocalJob(jobId, requestToken),
-      }).catch(() => {});
-    }
-  }, []);
+    if (jobId) void cancelJobById(jobId).catch(() => {});
+  }, [cancelJobById]);
 
   useEffect(() => cancelCurrentJob, [cancelCurrentJob]);
 
@@ -834,7 +836,10 @@ export default function Home() {
             ),
         });
         uploadRequestRef.current = null;
-        if (!stillCurrent()) return;
+        if (!stillCurrent()) {
+          void cancelJobById(created.id).catch(() => {});
+          return;
+        }
         activeJobRef.current = created.id;
 
         let pollingFailures = 0;
@@ -910,7 +915,15 @@ export default function Home() {
         setStage("error");
       }
     },
-    [cancelCurrentJob, checkEngine, engineHealth, engineState, language, quality],
+    [
+      cancelCurrentJob,
+      cancelJobById,
+      checkEngine,
+      engineHealth,
+      engineState,
+      language,
+      quality,
+    ],
   );
 
   const loadFile = useCallback(
