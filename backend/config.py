@@ -78,7 +78,11 @@ def normalise_quality(value: object) -> str:
 
 
 def normalise_language(value: object) -> str:
-    compact = "".join(character for character in str(value or "").strip().lower() if character.isalpha())
+    compact = "".join(
+        character
+        for character in str(value or "").strip().lower()
+        if character.isalpha()
+    )
     language = _LANGUAGE_ALIASES.get(compact)
     if not language:
         raise ValueError(
@@ -86,6 +90,22 @@ def normalise_language(value: object) -> str:
             "German, Italian, Portuguese, Japanese, or Korean."
         )
     return language
+
+
+def cpu_thread_count() -> int:
+    """Return one bounded thread budget shared by native and PyTorch workers."""
+
+    available = max(1, int(os.cpu_count() or 1))
+    maximum = min(32, available)
+    default = min(8, maximum)
+    raw = os.environ.get("LYRICWAVE_CPU_THREADS", "").strip()
+    if not raw:
+        return default
+    try:
+        requested = int(raw)
+    except ValueError:
+        return default
+    return max(1, min(maximum, requested))
 
 
 def _model_override(kind: str, quality: str) -> str:
