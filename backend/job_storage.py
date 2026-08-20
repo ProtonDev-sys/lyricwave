@@ -24,9 +24,15 @@ def discard_uploaded_source(job: JobState, vocal_path: Path) -> bool:
         source_resolved = source_path.resolve(strict=False)
         work_dir_resolved = work_dir.resolve(strict=False)
         vocal_resolved = vocal_path.resolve(strict=False)
-        if not source_resolved.is_relative_to(work_dir_resolved):
+        if source_resolved.parent != work_dir_resolved:
             return False
-        if source_resolved == vocal_resolved or not source_path.is_file():
+        if source_path.suffix.lower() not in ALLOWED_EXTENSIONS:
+            return False
+        if not vocal_resolved.is_relative_to(work_dir_resolved):
+            return False
+        if source_resolved == vocal_resolved or not vocal_path.is_file():
+            return False
+        if not source_path.is_file():
             return False
         source_path.unlink()
         return True
