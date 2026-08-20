@@ -6,6 +6,7 @@ import tempfile
 import threading
 import types
 import unittest
+from concurrent.futures import Future
 from pathlib import Path
 from unittest.mock import patch
 
@@ -104,10 +105,14 @@ class ApiBoundaryTest(unittest.TestCase):
 
     def test_valid_job_normalises_language_and_persists_metadata(self) -> None:
         submissions: list[tuple[object, ...]] = []
+        submitted_futures: list[Future[None]] = []
 
         class FakeExecutor:
-            def submit(self, *args: object) -> None:
+            def submit(self, *args: object) -> Future[None]:
                 submissions.append(args)
+                future: Future[None] = Future()
+                submitted_futures.append(future)
+                return future
 
         with tempfile.TemporaryDirectory() as directory, patch.object(
             server, "JOB_ROOT", Path(directory)
@@ -120,12 +125,16 @@ class ApiBoundaryTest(unittest.TestCase):
             )
             self.assertEqual(response["quality"], "fast")
             self.assertEqual(len(submissions), 1)
+            self.assertEqual(len(submitted_futures), 1)
             job_id = str(response["id"])
+            with server.JOBS_LOCK:
+                self.assertIs(server.JOBS[job_id].future, submitted_futures[0])
             metadata = json.loads(
                 (Path(directory) / job_id / "job.json").read_text(encoding="utf-8")
             )
             self.assertEqual(metadata["language"], "english")
             self.assertEqual(metadata["schema"], 2)
+            submitted_futures[0].cancel()
 
     def test_job_public_payload_uses_overridden_models(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.dict(
