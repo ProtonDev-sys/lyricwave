@@ -32,7 +32,6 @@ from backend.config import (
     MAX_FILE_SIZE,
     PRESETS,
     PROJECT_ROOT,
-    TERMINAL_STAGES,
     demucs_model_name,
     demucs_pass_count,
     normalise_language,
@@ -40,6 +39,11 @@ from backend.config import (
 )
 from backend.ctc_alignment import release_alignment_model
 from backend.inference_regions import _adaptive_vocal_regions
+from backend.job_execution import (
+    attach_job_future,
+    cancel_job_execution,
+    clear_job_execution,
+)
 from backend.job_lifecycle import (
     JobLifecycle,
     JobQueueFull,
@@ -101,15 +105,11 @@ def _shutdown_jobs() -> None:
     with JOBS_LOCK:
         jobs = list(JOBS.values())
     for job in jobs:
-        with job.lock:
-            process = job.process
-            terminal = job.stage in TERMINAL_STAGES
-        if terminal:
-            continue
-        job.cancelled.set()
-        job.update(stage="cancelled", status="Engine stopped")
-        if process:
-            _terminate_process(process)
+        cancel_job_execution(
+            job,
+            status="Engine stopped",
+            terminate_process=_terminate_process,
+        )
 
 
 @asynccontextmanager
@@ -125,6 +125,8 @@ app = FastAPI(
     version="0.3.0",
     lifespan=lifespan,
 )
+
+
 @app.middleware("http")
 async def local_security_headers(request: Request, call_next: Any) -> Any:
     origin = request.headers.get("origin")
@@ -387,7 +389,8 @@ async def create_job(
             )
             with JOBS_LOCK:
                 JOBS[job_id] = job
-            EXECUTOR.submit(_run_job, job)
+            future = EXECUTOR.submit(_run_job, job)
+            attach_job_future(job, future)
         except Exception:
             with JOBS_LOCK:
                 JOBS.pop(job_id, None)
@@ -420,14 +423,11 @@ def get_vocals(job_id: str) -> FileResponse:
 @app.delete("/api/jobs/{job_id}")
 def cancel_job(job_id: str) -> JSONResponse:
     job = _require_job(job_id)
-    job.cancelled.set()
-    with job.lock:
-        process = job.process
-        terminal = job.stage in TERMINAL_STAGES
-    if not terminal:
-        job.update(stage="cancelled", status="Stopped")
-    if process:
-        _terminate_process(process)
+    cancel_job_execution(
+        job,
+        status="Stopped",
+        terminate_process=_terminate_process,
+    )
     return JSONResponse({"ok": True})
 
 
@@ -566,8 +566,7 @@ def _run_job(job: JobState) -> None:
         message = _friendly_error(error, job)
         job.update(stage="error", status="Processing stopped", error=message)
     finally:
-        with job.lock:
-            job.process = None
+        clear_job_execution(job)
 
 
 def _check_cancelled(job: JobState) -> None:
