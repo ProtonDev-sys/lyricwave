@@ -205,47 +205,49 @@ def _package_ready(module: str) -> bool:
 def _runtime_info() -> dict[str, Any]:
     global _RUNTIME_CACHE
 
+    # Hold the probe lock through cache population. CUDA discovery imports
+    # Torch in a subprocess and can take several seconds on a cold start;
+    # concurrent health/upload requests should share that one probe.
     with _RUNTIME_LOCK:
         if _RUNTIME_CACHE and time.monotonic() - _RUNTIME_CACHE[0] < 60:
             return dict(_RUNTIME_CACHE[1])
 
-    info: dict[str, Any] = {
-        "ready": False,
-        "cuda": False,
-        "device": "CPU",
-        "ffmpeg": shutil.which("ffmpeg") is not None,
-        "ffprobe": shutil.which("ffprobe") is not None,
-        "demucs": _package_ready("demucs"),
-        "transformers": _package_ready("transformers"),
-    }
-    probe = (
-        "import json,torch; available=bool(torch.cuda.is_available()); "
-        "print(json.dumps({'torch':torch.__version__,'cuda':available,"
-        "'device':torch.cuda.get_device_name(0) if available else 'CPU'}))"
-    )
-    try:
-        creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        completed = subprocess.run(
-            [sys.executable, "-c", probe],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-            creationflags=creation_flags,
+        info: dict[str, Any] = {
+            "ready": False,
+            "cuda": False,
+            "device": "CPU",
+            "ffmpeg": shutil.which("ffmpeg") is not None,
+            "ffprobe": shutil.which("ffprobe") is not None,
+            "demucs": _package_ready("demucs"),
+            "transformers": _package_ready("transformers"),
+        }
+        probe = (
+            "import json,torch; available=bool(torch.cuda.is_available()); "
+            "print(json.dumps({'torch':torch.__version__,'cuda':available,"
+            "'device':torch.cuda.get_device_name(0) if available else 'CPU'}))"
         )
-        info.update(json.loads(completed.stdout.strip().splitlines()[-1]))
-    except Exception as error:  # pragma: no cover - diagnostic path
-        info["torch_error"] = str(error)
-    info["ready"] = bool(
-        info["cuda"]
-        and info["ffmpeg"]
-        and info["ffprobe"]
-        and info["demucs"]
-        and info["transformers"]
-    )
-    with _RUNTIME_LOCK:
+        try:
+            creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            completed = subprocess.run(
+                [sys.executable, "-c", probe],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+                creationflags=creation_flags,
+            )
+            info.update(json.loads(completed.stdout.strip().splitlines()[-1]))
+        except Exception as error:  # pragma: no cover - diagnostic path
+            info["torch_error"] = str(error)
+        info["ready"] = bool(
+            info["cuda"]
+            and info["ffmpeg"]
+            and info["ffprobe"]
+            and info["demucs"]
+            and info["transformers"]
+        )
         _RUNTIME_CACHE = (time.monotonic(), dict(info))
-    return info
+        return dict(info)
 
 
 def _worker_environment() -> dict[str, str]:
