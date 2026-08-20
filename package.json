@@ -8,14 +8,15 @@
   "scripts": {
     "dev": "node scripts/dev-local.mjs",
     "dev:site": "vinext dev",
-    "dev:engine": ".venv\\Scripts\\python.exe -m uvicorn backend.server:app --host 127.0.0.1 --port 8008",
-    "setup:engine": "powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1",
+    "dev:engine": "node scripts/run-python.mjs -m uvicorn backend.server:app --host 127.0.0.1 --port 8008",
+    "setup:engine": "node scripts/setup-engine.mjs",
     "build": "vinext build",
     "start": "vinext start",
     "test:frontend": "node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs",
-    "test:python": ".venv\\Scripts\\python.exe -m unittest discover -s backend",
+    "test:python": "node scripts/run-python.mjs -m unittest discover -s backend",
     "test": "npm run build && npm run test:frontend && npm run test:python",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .venv --ignore-pattern .local-data"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .venv --ignore-pattern .local-data",
+    "check": "npm run lint && npm run test"
   },
   "dependencies": {
     "lucide-react": "^1.31.0",

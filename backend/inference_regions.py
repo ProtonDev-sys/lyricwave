@@ -28,9 +28,6 @@ def _segment_uses_english_alignment(
 
 def _word_weight(text: str) -> float:
     letters = re.sub(r"[^\w]+", "", text, flags=re.UNICODE).replace("_", "")
-    # Sub-linear weighting prevents one unusually long token from consuming an
-    # entire phrase while still avoiding equal-width timing for "a" and
-    # "extraordinary".
     return max(1.0, float(len(letters)) ** 0.72)
 
 
@@ -63,11 +60,7 @@ def _fill_short_gaps(active: np.ndarray, maximum_gap_frames: int) -> None:
         start = index
         while index < active.size and not active[index]:
             index += 1
-        if (
-            start > 0
-            and index < active.size
-            and index - start <= maximum_gap_frames
-        ):
+        if start > 0 and index < active.size and index - start <= maximum_gap_frames:
             active[start:index] = True
 
 
@@ -88,12 +81,7 @@ def _adaptive_vocal_regions(
     waveform: np.ndarray,
     sample_rate: int = SAMPLE_RATE,
 ) -> list[tuple[int, int]]:
-    """Create Whisper-sized regions using local rather than global vocal energy.
-
-    A single loud chorus should not set the activity threshold for a quiet verse.
-    Local reference levels plus hysteresis preserve quieter sections while still
-    excluding silent intros and long instrumental gaps.
-    """
+    """Create Whisper-sized regions using local rather than global vocal energy."""
 
     if waveform.size < max(3, int(0.15 * sample_rate)):
         return []
@@ -117,17 +105,11 @@ def _adaptive_vocal_regions(
         np.pad(rms, (0, context_frames), mode="edge"),
         context_frames + 1,
     )
-    # Taking the quieter of the past and future references lets the threshold
-    # fall immediately at a loud-to-quiet transition instead of suppressing the
-    # first words of a soft bridge for several seconds.
     local_reference = np.minimum(
         np.percentile(trailing_windows, 85, axis=1),
         np.percentile(leading_windows, 85, axis=1),
     )
 
-    # Keep only a small absolute floor. Tying this floor to the loudest frame
-    # recreates the global-threshold failure this detector is designed to avoid:
-    # a clipped chorus can otherwise suppress a very soft verse.
     on_threshold = np.maximum(
         0.00025,
         noise_floor + np.maximum(0.0, local_reference - noise_floor) * 0.20,
@@ -167,7 +149,6 @@ def _adaptive_vocal_regions(
     if not runs:
         return []
 
-    # Padding can make neighbouring runs touch. Merge those first.
     consolidated: list[tuple[int, int]] = []
     for start, end in runs:
         if consolidated and start <= consolidated[-1][1]:
