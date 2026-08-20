@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -67,6 +68,7 @@ class JobState:
     lines: list[dict[str, Any]] = field(default_factory=list)
     vocal_path: Path | None = None
     device: str = ""
+    future: Future[Any] | None = field(default=None, repr=False)
     process: subprocess.Popen[str] | None = field(default=None, repr=False)
     cancelled: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
