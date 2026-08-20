@@ -93,8 +93,13 @@ class LocalRequestSecurityTest(unittest.TestCase):
     def test_middleware_order_keeps_cors_outside_direct_guard_responses(self) -> None:
         middleware_names = [item.cls.__name__ for item in server.app.user_middleware]
         self.assertEqual(
-            middleware_names[:3],
-            ["TrustedHostMiddleware", "CORSMiddleware", "BaseHTTPMiddleware"],
+            middleware_names[:4],
+            [
+                "TrustedHostMiddleware",
+                "CORSMiddleware",
+                "BaseHTTPMiddleware",
+                "JobUploadSizeLimitMiddleware",
+            ],
         )
 
     def test_health_exposes_the_token_to_authorized_local_clients(self) -> None:
