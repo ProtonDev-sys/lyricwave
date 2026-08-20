@@ -1,0 +1,23 @@
+name: Export branch source
+
+on:
+  push:
+    branches: [codex/fix-audio-ui-regression]
+    paths:
+      - .github/workflows/export-source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Package source
+        run: tar --exclude=.git -czf /tmp/lyricwave-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lyricwave-source
+          path: /tmp/lyricwave-source.tgz
+          retention-days: 1
