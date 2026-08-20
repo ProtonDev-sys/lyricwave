@@ -41,7 +41,6 @@ function waitForExit(child, timeoutMs) {
     const onExit = () => finish(true);
     child.once("exit", onExit);
     timer = setTimeout(() => finish(false), Math.max(0, timeoutMs));
-    timer.unref?.();
   });
 }
 
