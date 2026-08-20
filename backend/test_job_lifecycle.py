@@ -1,5 +1,4 @@
 import asyncio
-import io
 import os
 import tempfile
 import threading
@@ -8,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fastapi import HTTPException, UploadFile
+from fastapi import Request
 
 from backend import server
 from backend.job_lifecycle import (
@@ -95,33 +94,43 @@ class JobLifecycleTest(unittest.TestCase):
 
 class ApiAdmissionTest(unittest.TestCase):
     @staticmethod
-    def _runtime() -> dict[str, object]:
-        return {
-            "ready": True,
-            "cuda": True,
-            "device": "Test GPU",
-            "ffmpeg": True,
-            "ffprobe": True,
-            "demucs": True,
-            "transformers": True,
-        }
+    def _request() -> Request:
+        return Request(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/jobs",
+                "raw_path": b"/api/jobs",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"127.0.0.1:8008"),
+                    (b"origin", b"http://localhost:3000"),
+                    (
+                        server.REQUEST_TOKEN_HEADER.lower().encode("ascii"),
+                        server.REQUEST_TOKEN.encode("ascii"),
+                    ),
+                ],
+                "client": ("127.0.0.1", 50000),
+                "server": ("127.0.0.1", 8008),
+            }
+        )
 
     def tearDown(self) -> None:
         with server.JOBS_LOCK:
             server.JOBS.clear()
 
-    def test_full_queue_rejects_before_audio_is_stored_or_probed(self) -> None:
+    def test_full_queue_rejects_before_multipart_parsing(self) -> None:
+        async def must_not_parse_body(_: Request):
+            raise AssertionError("A full queue must reject before endpoint body parsing.")
+
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ,
             {"LYRICWAVE_MAX_PENDING_JOBS": "1"},
             clear=True,
-        ), patch.object(server, "JOB_ROOT", Path(directory)), patch.object(
-            server, "_runtime_info", return_value=self._runtime()
-        ), patch.object(
-            server,
-            "_probe_duration",
-            side_effect=AssertionError("A rejected upload must not be probed."),
-        ):
+        ), patch.object(server, "JOB_ROOT", Path(directory)):
             active_dir = Path(directory) / ("c" * 32)
             active_dir.mkdir()
             active = JobState(
@@ -137,16 +146,13 @@ class ApiAdmissionTest(unittest.TestCase):
             with server.JOBS_LOCK:
                 server.JOBS[active.id] = active
 
-            upload = UploadFile(filename="next.mp3", file=io.BytesIO(b"audio"))
-            with self.assertRaises(HTTPException) as context:
-                asyncio.run(
-                    server.create_job(upload, language="english", quality="fast")
-                )
+            response = asyncio.run(
+                server.local_security_headers(self._request(), must_not_parse_body)
+            )
 
-            self.assertEqual(context.exception.status_code, 429)
-            self.assertEqual(context.exception.headers, {"Retry-After": "5"})
-            self.assertTrue(upload.file.closed)
-            self.assertEqual([path.name for path in Path(directory).iterdir()], [active.id])
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(response.headers["Retry-After"], "5")
+            self.assertEqual([item.name for item in Path(directory).iterdir()], [active.id])
 
 
 if __name__ == "__main__":

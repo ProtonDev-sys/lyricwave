@@ -119,7 +119,8 @@ caches. Local jobs stay under the ignored `.local-data` directory and expire aft
 hours by default. Expired terminal jobs are pruned from memory and disk during engine
 startup and later API activity, so a long-running engine does not accumulate stale data.
 
-The single-GPU queue is bounded before upload bytes are stored. By default it accepts
+The single-GPU queue is reserved in middleware before FastAPI parses or spools multipart
+upload data. By default it accepts
 two pending items in total—uploads, queued jobs, and active jobs—and returns HTTP 429
 with `Retry-After` when full. This prevents multiple browser tabs or clients from building
 an unbounded backlog of large local files.

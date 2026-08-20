@@ -125,21 +125,6 @@ app = FastAPI(
     version="0.3.0",
     lifespan=lifespan,
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=(
-        r"https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?"
-    ),
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", REQUEST_TOKEN_HEADER],
-)
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=["localhost", "127.0.0.1", "[::1]"],
-)
-
-
 @app.middleware("http")
 async def local_security_headers(request: Request, call_next: Any) -> Any:
     origin = request.headers.get("origin")
@@ -165,11 +150,42 @@ async def local_security_headers(request: Request, call_next: Any) -> Any:
             },
         )
     else:
-        response = await call_next(request)
+        try:
+            if (
+                request.method == "POST"
+                and request.url.path.rstrip("/") == "/api/jobs"
+            ):
+                # Middleware runs before FastAPI parses multipart form data, so a
+                # full queue rejects the request before UploadFile can spool bytes.
+                with JOB_LIFECYCLE.reserve(JOB_ROOT):
+                    response = await call_next(request)
+            else:
+                response = await call_next(request)
+        except JobQueueFull as error:
+            response = JSONResponse(
+                status_code=429,
+                content={"detail": str(error)},
+                headers={"Retry-After": str(error.retry_after_seconds)},
+            )
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=(
+        r"https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?"
+    ),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", REQUEST_TOKEN_HEADER],
+)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "127.0.0.1", "[::1]"],
+)
 
 
 def _package_ready(module: str) -> bool:
@@ -310,82 +326,74 @@ async def create_job(
         if extension not in ALLOWED_EXTENSIONS:
             raise HTTPException(status_code=415, detail="Choose a supported audio file.")
 
+        job_id = uuid.uuid4().hex
+        work_dir = JOB_ROOT / job_id
+        work_dir.mkdir(parents=True, exist_ok=False)
+        source_path = work_dir / f"source{extension}"
+        size = 0
         try:
-            with JOB_LIFECYCLE.reserve(JOB_ROOT):
-                job_id = uuid.uuid4().hex
-                work_dir = JOB_ROOT / job_id
-                work_dir.mkdir(parents=True, exist_ok=False)
-                source_path = work_dir / f"source{extension}"
-                size = 0
-                try:
-                    with source_path.open("wb") as destination:
-                        while chunk := await file.read(1024 * 1024):
-                            size += len(chunk)
-                            if size > MAX_FILE_SIZE:
-                                raise HTTPException(
-                                    status_code=413,
-                                    detail="Audio files are limited to 500 MB.",
-                                )
-                            destination.write(chunk)
-                    if size == 0:
-                        raise HTTPException(
-                            status_code=400,
-                            detail="The selected audio file is empty.",
-                        )
-                    duration = _probe_duration(source_path)
-                    if duration > MAX_DURATION_SECONDS:
+            with source_path.open("wb") as destination:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_FILE_SIZE:
                         raise HTTPException(
                             status_code=413,
-                            detail="Audio duration is limited to three hours.",
+                            detail="Audio files are limited to 500 MB.",
                         )
-                except HTTPException:
-                    shutil.rmtree(work_dir, ignore_errors=True)
-                    raise
-                except (OSError, ValueError, subprocess.SubprocessError) as error:
-                    shutil.rmtree(work_dir, ignore_errors=True)
-                    raise HTTPException(
-                        status_code=400,
-                        detail="The selected file could not be decoded as supported audio.",
-                    ) from error
-
-                job = JobState(
-                    id=job_id,
-                    filename=original_name,
-                    source_path=source_path,
-                    work_dir=work_dir,
-                    language=language,
-                    quality=quality,
-                    duration=duration,
-                    device=str(runtime["device"]),
+                    destination.write(chunk)
+            if size == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="The selected audio file is empty.",
                 )
-                try:
-                    write_json_atomic(
-                        work_dir / "job.json",
-                        {
-                            "schema": 2,
-                            "filename": original_name,
-                            "language": language,
-                            "quality": quality,
-                            "duration": duration,
-                            "device": str(runtime["device"]),
-                            "created_at": job.created_at,
-                        },
-                    )
-                    with JOBS_LOCK:
-                        JOBS[job_id] = job
-                    EXECUTOR.submit(_run_job, job)
-                except Exception:
-                    with JOBS_LOCK:
-                        JOBS.pop(job_id, None)
-                    shutil.rmtree(work_dir, ignore_errors=True)
-                    raise
-                return job.public(include_result=False)
-        except JobQueueFull as error:
+            duration = _probe_duration(source_path)
+            if duration > MAX_DURATION_SECONDS:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Audio duration is limited to three hours.",
+                )
+        except HTTPException:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            shutil.rmtree(work_dir, ignore_errors=True)
             raise HTTPException(
-                status_code=429,
-                detail=str(error),
-                headers={"Retry-After": str(error.retry_after_seconds)},
+                status_code=400,
+                detail="The selected file could not be decoded as supported audio.",
             ) from error
+
+        job = JobState(
+            id=job_id,
+            filename=original_name,
+            source_path=source_path,
+            work_dir=work_dir,
+            language=language,
+            quality=quality,
+            duration=duration,
+            device=str(runtime["device"]),
+        )
+        try:
+            write_json_atomic(
+                work_dir / "job.json",
+                {
+                    "schema": 2,
+                    "filename": original_name,
+                    "language": language,
+                    "quality": quality,
+                    "duration": duration,
+                    "device": str(runtime["device"]),
+                    "created_at": job.created_at,
+                },
+            )
+            with JOBS_LOCK:
+                JOBS[job_id] = job
+            EXECUTOR.submit(_run_job, job)
+        except Exception:
+            with JOBS_LOCK:
+                JOBS.pop(job_id, None)
+            shutil.rmtree(work_dir, ignore_errors=True)
+            raise
+        return job.public(include_result=False)
     finally:
         await file.close()
 

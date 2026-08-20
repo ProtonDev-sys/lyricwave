@@ -74,6 +74,8 @@ test("uses the modular localhost inference engine and word-level results", async
   assert.match(backend, /backend\.inference_worker/);
   assert.match(backend, /TrustedHostMiddleware/);
   assert.match(backend, /hmac\.compare_digest/);
+  assert.match(backend, /with JOB_LIFECYCLE\.reserve\(JOB_ROOT\)/);
+  assert.match(backend, /before FastAPI parses multipart form data/);
   assert.match(inferenceWorker, /set_per_process_memory_fraction\(_vram_fraction\(\)/);
   assert.doesNotMatch(backend, /AutoModelForSpeechSeq2Seq|AutoModelForCTC/);
   assert.doesNotMatch(page, /@browserai|onnxruntime-web|@huggingface\/transformers/);
