@@ -34,6 +34,7 @@ test("server-renders the lyricwave workspace", async () => {
 
 test("uses the modular localhost inference engine and word-level results", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const timeline = await readFile(new URL("../app/lyric-timeline.js", import.meta.url), "utf8");
   const backend = await readFile(new URL("../backend/server.py", import.meta.url), "utf8");
   const config = await readFile(new URL("../backend/config.py", import.meta.url), "utf8");
   const pipeline = await readFile(
@@ -52,6 +53,17 @@ test("uses the modular localhost inference engine and word-level results", async
   assert.match(page, /http:\/\/127\.0\.0\.1:8008/);
   assert.match(page, /FormData\(\)/);
   assert.match(page, /URL\.createObjectURL/);
+  assert.match(page, /memo\(function LyricsLines/);
+  assert.match(page, /findActiveIntervalIndexes/);
+  assert.match(page, /RetryablePollingError/);
+  assert.match(page, /MAX_CONSECUTIVE_POLLING_FAILURES = 6/);
+  assert.match(page, /job = await fetchJobStatus\(created\.id\)/);
+  assert.match(page, /pollingFailures >= MAX_CONSECUTIVE_POLLING_FAILURES/);
+  assert.match(page, /setPlaybackMode\(previousMode\)/);
+  assert.match(page, /audio\.src = previousUrl/);
+  assert.doesNotMatch(page, /wordTimeline\s*\.map\(/);
+  assert.match(timeline, /buildPrefixMaxEnds/);
+  assert.match(timeline, /pollingRetryDelay/);
   assert.match(config, /htdemucs_ft/);
   assert.match(config, /whisper-large-v3/);
   assert.match(pipeline, /return_timestamps=True/);

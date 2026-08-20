@@ -4,6 +4,7 @@ import {
   type CSSProperties,
   type ChangeEvent,
   type DragEvent,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -32,6 +33,13 @@ import {
   Waves,
   X,
 } from "lucide-react";
+import {
+  buildLineWordOffsets,
+  buildPrefixMaxEnds,
+  findActiveIntervalIndexes,
+  findLastStartedIndex,
+  pollingRetryDelay,
+} from "./lyric-timeline.js";
 import { wordFillAt } from "./lyric-timing.js";
 type ProcessingStage =
   | "idle"
@@ -92,14 +100,16 @@ type BackendHealth = {
   cuda: boolean;
   device: string;
   ffmpeg: boolean;
+  ffprobe?: boolean;
   demucs: boolean;
   transformers: boolean;
 };
 
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "flac", "m4a", "aac", "ogg", "webm"];
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const MAX_CONSECUTIVE_POLLING_FAILURES = 6;
 const LYRIC_LOOKAHEAD_SECONDS = 0.055;
-const PLAYER_CLOCK_INTERVAL_MS = 80;
+const PLAYER_CLOCK_INTERVAL_MS = 100;
 const LOCAL_API_URL =
   process.env.NEXT_PUBLIC_LYRICWAVE_API_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8008";
 
@@ -140,7 +150,7 @@ function parseTrackName(fileName: string) {
 
 function isAudioFile(file: File) {
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
-  return file.type.startsWith("audio/") || ACCEPTED_EXTENSIONS.includes(extension);
+  return ACCEPTED_EXTENSIONS.includes(extension);
 }
 
 function groupIntoLines(words: TimedWord[]): LyricLine[] {
@@ -212,6 +222,35 @@ function apiMessage(payload: unknown, fallback: string) {
   return fallback;
 }
 
+class RetryablePollingError extends Error {}
+
+function isRetryablePollingError(error: unknown) {
+  return (
+    error instanceof RetryablePollingError ||
+    error instanceof SyntaxError ||
+    error instanceof TypeError ||
+    (error instanceof DOMException &&
+      ["AbortError", "NetworkError", "TimeoutError"].includes(error.name))
+  );
+}
+
+async function fetchJobStatus(jobId: string) {
+  const response = await fetch(`${LOCAL_API_URL}/api/jobs/${jobId}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(10_000),
+  });
+  const payload = (await response.json()) as BackendJob | { detail?: string };
+  if (response.status === 408 || response.status === 429 || response.status >= 500) {
+    throw new RetryablePollingError(
+      apiMessage(payload, `The local engine returned ${response.status}.`),
+    );
+  }
+  if (!response.ok) {
+    throw new Error(apiMessage(payload, `The local engine returned ${response.status}.`));
+  }
+  return payload as BackendJob;
+}
+
 function uploadToLocalEngine(
   file: File,
   language: string,
@@ -251,13 +290,80 @@ function wait(milliseconds: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
+type LyricsLinesProps = {
+  lines: LyricLine[];
+  lineWordOffsets: number[];
+  lineRefs: { current: Array<HTMLButtonElement | null> };
+  wordRefs: { current: Array<HTMLSpanElement | null> };
+  directScrollLineRef: { current: number | null };
+  onSeek: (time: number) => void;
+  onScrollToLine: (lineIndex: number) => void;
+};
+
+const LyricsLines = memo(function LyricsLines({
+  lines,
+  lineWordOffsets,
+  lineRefs,
+  wordRefs,
+  directScrollLineRef,
+  onSeek,
+  onScrollToLine,
+}: LyricsLinesProps) {
+  return (
+    <div className="lyrics-lines">
+      {lines.map((line, lineIndex) => (
+        <button
+          className={`lyric-line ${(line.kind ?? "lead") === "adlib" ? "is-adlib" : ""}`}
+          key={line.id}
+          type="button"
+          ref={(element) => {
+            lineRefs.current[lineIndex] = element;
+          }}
+          onMouseDown={(event) => {
+            if (event.detail > 0) event.preventDefault();
+          }}
+          onClick={(event) => {
+            if (event.detail > 0) event.currentTarget.blur();
+            const wordElement = (event.target as HTMLElement).closest<HTMLElement>(
+              "[data-word-start]",
+            );
+            const wordStart = Number(wordElement?.dataset.wordStart);
+            const seekTime = Number.isFinite(wordStart) ? wordStart : line.start;
+            directScrollLineRef.current = lineIndex;
+            onSeek(seekTime);
+            onScrollToLine(lineIndex);
+          }}
+          aria-label={`Seek to line at ${formatTime(line.start)}: ${line.words
+            .map((word) => word.text)
+            .join(" ")}`}
+        >
+          {line.words.map((word, wordIndex) => (
+            <span
+              key={`${word.start}-${wordIndex}`}
+              className="lyric-word"
+              ref={(element) => {
+                wordRefs.current[lineWordOffsets[lineIndex] + wordIndex] = element;
+              }}
+              title={`Jump to ${formatTime(word.start)}`}
+              data-word-start={word.start}
+              data-timing={word.timing?.length ? "acoustic" : "linear"}
+            >
+              <span className="lyric-word-label">{word.text}</span>
+            </span>
+          ))}
+        </button>
+      ))}
+    </div>
+  );
+});
+
 export default function Home() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const lyricsRef = useRef<HTMLElement>(null);
   const lyricsScrollRef = useRef<HTMLDivElement>(null);
-  const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const wordRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const lineRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const wordRefs = useRef<Array<HTMLSpanElement | null>>([]);
   const directScrollLineRef = useRef<number | null>(null);
   const objectUrlsRef = useRef<string[]>([]);
   const runIdRef = useRef(0);
@@ -267,7 +373,7 @@ export default function Home() {
   const activeWordIndexesRef = useRef<number[]>([]);
   const lastLyricTimeRef = useRef(0);
   const focusedLineIndexRef = useRef(-1);
-  const activeLineSignatureRef = useRef("");
+  const activeLineIndexesRef = useRef<number[]>([]);
 
   const [file, setFile] = useState<File | null>(null);
   const [track, setTrack] = useState({ title: "No song loaded", artist: "Choose local audio" });
@@ -293,49 +399,55 @@ export default function Home() {
   );
   const [engineHealth, setEngineHealth] = useState<BackendHealth | null>(null);
   const [engineDetail, setEngineDetail] = useState("");
-  const [activeLineIndexes, setActiveLineIndexes] = useState<number[]>([]);
   const [focusedLineIndex, setFocusedLineIndex] = useState(-1);
 
-  const lineWordOffsets = useMemo(() => {
-    return lines.map((_, lineIndex) =>
-      lines
-        .slice(0, lineIndex)
-        .reduce((offset, line) => offset + line.words.length, 0),
-    );
-  }, [lines]);
+  const lineWordOffsets = useMemo(() => buildLineWordOffsets(lines), [lines]);
 
   const wordTimeline = useMemo(
     () =>
-      lines.flatMap((line, lineIndex) =>
-        line.words.map((word, wordIndex) => ({
-          ...word,
-          lineIndex,
-          refIndex: lineWordOffsets[lineIndex] + wordIndex,
-        })),
-      ).sort((left, right) => left.start - right.start || left.end - right.end),
+      lines
+        .flatMap((line, lineIndex) =>
+          line.words.map((word, wordIndex) => ({
+            ...word,
+            lineIndex,
+            refIndex: lineWordOffsets[lineIndex] + wordIndex,
+          })),
+        )
+        .sort((left, right) => left.start - right.start || left.end - right.end),
     [lineWordOffsets, lines],
+  );
+  const wordPrefixMaxEnds = useMemo(
+    () => buildPrefixMaxEnds(wordTimeline),
+    [wordTimeline],
+  );
+  const lineTimeline = useMemo(
+    () =>
+      lines
+        .map((line, lineIndex) => ({
+          start: line.start - 0.03,
+          end: line.end + 0.24,
+          lineIndex,
+          kind: line.kind ?? "lead",
+        }))
+        .sort((left, right) => left.start - right.start || left.end - right.end),
+    [lines],
+  );
+  const linePrefixMaxEnds = useMemo(
+    () => buildPrefixMaxEnds(lineTimeline),
+    [lineTimeline],
   );
 
   const syncLyricsAt = useCallback(
     (audioTime: number, force = false) => {
       const displayTime = Math.max(0, audioTime + LYRIC_LOOKAHEAD_SECONDS);
-      let low = 0;
-      let high = wordTimeline.length - 1;
-      let candidate = -1;
-      while (low <= high) {
-        const middle = (low + high) >> 1;
-        if (wordTimeline[middle].start <= displayTime) {
-          candidate = middle;
-          low = middle + 1;
-        } else {
-          high = middle - 1;
-        }
-      }
-      const nextActive = wordTimeline
-        .map((word, index) =>
-          word.start <= displayTime && displayTime < word.end ? index : -1,
-        )
-        .filter((index) => index >= 0);
+      const jumped = force || Math.abs(displayTime - lastLyricTimeRef.current) > 0.5;
+      const candidate = findLastStartedIndex(wordTimeline, displayTime);
+      const nextActive = findActiveIntervalIndexes(
+        wordTimeline,
+        wordPrefixMaxEnds,
+        displayTime,
+      );
+      const nextActiveSet = new Set(nextActive);
       const previousActive = activeWordIndexesRef.current;
 
       const resetWord = (index: number) => {
@@ -348,11 +460,11 @@ export default function Home() {
         element.style.setProperty("--word-fill", past ? "100%" : "0%");
       };
 
-      if (force || Math.abs(displayTime - lastLyricTimeRef.current) > 0.5) {
+      if (jumped) {
         wordTimeline.forEach((_, index) => resetWord(index));
       } else {
         previousActive
-          .filter((index) => !nextActive.includes(index))
+          .filter((index) => !nextActiveSet.has(index))
           .forEach((index) => resetWord(index));
       }
 
@@ -366,22 +478,42 @@ export default function Home() {
           element.style.setProperty("--word-fill", `${progress * 100}%`);
         }
       });
-      if (!nextActive.length && candidate >= 0) {
-        resetWord(candidate);
-      }
+      if (!nextActive.length && candidate >= 0) resetWord(candidate);
       activeWordIndexesRef.current = nextActive;
-      lastLyricTimeRef.current = displayTime;
 
-      const liveLines = lines
-        .map((line, index) =>
-          displayTime >= line.start - 0.03 && displayTime <= line.end + 0.24 ? index : -1,
-        )
-        .filter((index) => index >= 0);
-      const signature = liveLines.join(",");
-      if (signature !== activeLineSignatureRef.current) {
-        activeLineSignatureRef.current = signature;
-        setActiveLineIndexes(liveLines);
+      const activeLineTimelineIndexes = findActiveIntervalIndexes(
+        lineTimeline,
+        linePrefixMaxEnds,
+        displayTime,
+      );
+      const liveLines = activeLineTimelineIndexes.map(
+        (timelineIndex) => lineTimeline[timelineIndex].lineIndex,
+      );
+      const liveLineSet = new Set(liveLines);
+      const previousLiveLines = activeLineIndexesRef.current;
+      const resetLine = (lineIndex: number) => {
+        const element = lineRefs.current[lineIndex];
+        const line = lines[lineIndex];
+        if (!element || !line) return;
+        element.classList.remove("is-active");
+        element.classList.toggle("is-past", displayTime > line.end);
+      };
+
+      if (jumped) {
+        lines.forEach((_, lineIndex) => resetLine(lineIndex));
+      } else {
+        previousLiveLines
+          .filter((lineIndex) => !liveLineSet.has(lineIndex))
+          .forEach((lineIndex) => resetLine(lineIndex));
       }
+      liveLines.forEach((lineIndex) => {
+        const element = lineRefs.current[lineIndex];
+        if (!element) return;
+        element.classList.add("is-active");
+        element.classList.remove("is-past");
+      });
+      activeLineIndexesRef.current = liveLines;
+      lastLyricTimeRef.current = displayTime;
 
       const focusedWordIndex =
         nextActive.find((index) => (wordTimeline[index].kind ?? "lead") === "lead") ??
@@ -390,22 +522,20 @@ export default function Home() {
         focusedWordIndex === undefined ? -1 : wordTimeline[focusedWordIndex].lineIndex;
       if (nextFocused < 0 && liveLines.length) {
         nextFocused =
-          liveLines.find((index) => (lines[index].kind ?? "lead") === "lead") ?? liveLines[0];
+          liveLines.find((lineIndex) => (lines[lineIndex].kind ?? "lead") === "lead") ??
+          liveLines[0];
       }
       if (nextFocused < 0) {
-        for (let index = lines.length - 1; index >= 0; index -= 1) {
-          if (displayTime >= lines[index].start) {
-            nextFocused = index;
-            break;
-          }
-        }
+        const lastStartedLine = findLastStartedIndex(lineTimeline, displayTime);
+        nextFocused =
+          lastStartedLine >= 0 ? lineTimeline[lastStartedLine].lineIndex : -1;
       }
       if (nextFocused !== focusedLineIndexRef.current) {
         focusedLineIndexRef.current = nextFocused;
         setFocusedLineIndex(nextFocused);
       }
     },
-    [lines, wordTimeline],
+    [linePrefixMaxEnds, lineTimeline, lines, wordPrefixMaxEnds, wordTimeline],
   );
 
   const clearObjectUrls = useCallback(() => {
@@ -413,9 +543,6 @@ export default function Home() {
     objectUrlsRef.current = [];
   }, []);
 
-  // Blob URLs are released when a song is replaced or the player is reset.
-  // Revoking them from an unmount cleanup breaks playback during Vite Fast
-  // Refresh because React preserves the File state while remounting effects.
   useEffect(() => {
     fileRef.current = file;
     if (!file || !originalUrl || objectUrlsRef.current.includes(originalUrl)) return;
@@ -570,14 +697,17 @@ export default function Home() {
     }
   }, [originalUrl]);
 
-  const seekTo = useCallback((time: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const nextTime = Math.max(0, Math.min(time, audio.duration || 0));
-    audio.currentTime = nextTime;
-    setCurrentTime(nextTime);
-    syncLyricsAt(nextTime, true);
-  }, [syncLyricsAt]);
+  const seekTo = useCallback(
+    (time: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const nextTime = Math.max(0, Math.min(time, audio.duration || 0));
+      audio.currentTime = nextTime;
+      setCurrentTime(nextTime);
+      syncLyricsAt(nextTime, true);
+    },
+    [syncLyricsAt],
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -627,18 +757,30 @@ export default function Home() {
         if (!stillCurrent()) return;
         activeJobRef.current = created.id;
 
+        let pollingFailures = 0;
         while (stillCurrent()) {
-          const response = await fetch(`${LOCAL_API_URL}/api/jobs/${created.id}`, {
-            cache: "no-store",
-            signal: AbortSignal.timeout(10_000),
-          });
-          const payload = (await response.json()) as BackendJob | { detail?: string };
-          if (!response.ok) {
-            throw new Error(apiMessage(payload, `The local engine returned ${response.status}.`));
+          let job: BackendJob;
+          try {
+            job = await fetchJobStatus(created.id);
+          } catch (pollingError) {
+            if (!stillCurrent()) return;
+            if (!isRetryablePollingError(pollingError)) throw pollingError;
+            pollingFailures += 1;
+            if (pollingFailures >= MAX_CONSECUTIVE_POLLING_FAILURES) {
+              throw pollingError;
+            }
+            const retryDelay = pollingRetryDelay(pollingFailures);
+            setStatus(
+              `Local engine connection interrupted · retrying in ${Math.ceil(
+                retryDelay / 1000,
+              )}s`,
+            );
+            await wait(retryDelay);
+            continue;
           }
-          const job = payload as BackendJob;
-          if (!stillCurrent()) return;
 
+          if (!stillCurrent()) return;
+          pollingFailures = 0;
           setProgress(job.progress);
           setStatus(job.status);
           if (job.duration > 0) setDuration(job.duration);
@@ -722,9 +864,9 @@ export default function Home() {
       activeWordIndexesRef.current = [];
       lastLyricTimeRef.current = 0;
       focusedLineIndexRef.current = -1;
-      activeLineSignatureRef.current = "";
+      activeLineIndexesRef.current = [];
+      lineRefs.current = [];
       wordRefs.current = [];
-      setActiveLineIndexes([]);
       setFocusedLineIndex(-1);
       setError("");
 
@@ -781,9 +923,9 @@ export default function Home() {
     activeWordIndexesRef.current = [];
     lastLyricTimeRef.current = 0;
     focusedLineIndexRef.current = -1;
-    activeLineSignatureRef.current = "";
+    activeLineIndexesRef.current = [];
+    lineRefs.current = [];
     wordRefs.current = [];
-    setActiveLineIndexes([]);
     setFocusedLineIndex(-1);
     setPlaybackMode("mix");
     setEngineDetail("");
@@ -794,21 +936,43 @@ export default function Home() {
     if (nextMode === "vocals" && !vocalUrl) return;
     const audio = audioRef.current;
     if (!audio || nextMode === playbackMode) return;
+    const previousMode = playbackMode;
+    const previousUrl = previousMode === "vocals" ? vocalUrl : originalUrl;
     const time = audio.currentTime;
     const shouldResume = !audio.paused;
+
+    const restorePositionAndPlayback = async () => {
+      audio.currentTime = Math.min(time, audio.duration || time);
+      setCurrentTime(audio.currentTime);
+      syncLyricsAt(audio.currentTime, true);
+      if (shouldResume) {
+        try {
+          await audio.play();
+        } catch {
+          setError("Playback was blocked after switching sources. Press play to continue.");
+        }
+      }
+    };
+    const handleLoadError = () => {
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      setPlaybackMode(previousMode);
+      setError("The selected playback source could not be loaded. Restored the previous source.");
+      if (previousUrl) {
+        audio.addEventListener("loadedmetadata", restorePositionAndPlayback, { once: true });
+        audio.src = previousUrl;
+        audio.load();
+      }
+    };
+    const handleLoadedMetadata = async () => {
+      audio.removeEventListener("error", handleLoadError);
+      await restorePositionAndPlayback();
+    };
+
     audio.pause();
+    audio.addEventListener("loadedmetadata", handleLoadedMetadata, { once: true });
+    audio.addEventListener("error", handleLoadError, { once: true });
     audio.src = nextMode === "vocals" ? vocalUrl : originalUrl;
     audio.load();
-    audio.addEventListener(
-      "loadedmetadata",
-      () => {
-        audio.currentTime = Math.min(time, audio.duration || time);
-        setCurrentTime(audio.currentTime);
-        syncLyricsAt(audio.currentTime, true);
-        if (shouldResume) void audio.play();
-      },
-      { once: true },
-    );
     setPlaybackMode(nextMode);
   };
 
@@ -1022,13 +1186,24 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="pipeline-card" aria-live="polite">
+              <div
+                className="pipeline-card"
+                aria-live="polite"
+                aria-busy={stage !== "complete" && stage !== "error"}
+              >
                 <div className="pipeline-topline">
                   <span>{stage === "complete" ? "Ready to play" : stage === "error" ? "Needs attention" : "Making lyrics"}</span>
                   <strong>{Math.round(progress)}%</strong>
                 </div>
-                <div className="progress-track" aria-hidden="true">
-                  <span style={{ width: `${progress}%` }} />
+                <div
+                  className="progress-track"
+                  role="progressbar"
+                  aria-label="Lyric processing progress"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(progress)}
+                >
+                  <span aria-hidden="true" style={{ width: `${progress}%` }} />
                 </div>
                 <p className="status-copy">{status}</p>
 
@@ -1074,11 +1249,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {engineDetail && (
-                  <p className="engine-detail">
-                    {engineDetail}
-                  </p>
-                )}
+                {engineDetail && <p className="engine-detail">{engineDetail}</p>}
                 {stage === "error" && (
                   <div className="error-card">
                     <p>{error}</p>
@@ -1128,55 +1299,15 @@ export default function Home() {
             ref={lyricsScrollRef}
           >
             {stage === "complete" ? (
-              <div className="lyrics-lines">
-                {lines.map((line, lineIndex) => (
-                  <div
-                    className={`lyric-line ${(line.kind ?? "lead") === "adlib" ? "is-adlib" : ""} ${activeLineIndexes.includes(lineIndex) ? "is-active" : ""} ${currentTime + LYRIC_LOOKAHEAD_SECONDS > line.end && !activeLineIndexes.includes(lineIndex) ? "is-past" : ""}`}
-                    key={line.id}
-                    ref={(element) => {
-                      lineRefs.current[lineIndex] = element;
-                    }}
-                  >
-                    <button
-                      className="line-seek-target"
-                      type="button"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={(event) => {
-                        if (event.detail > 0) event.currentTarget.blur();
-                        directScrollLineRef.current = lineIndex;
-                        seekTo(line.start);
-                        scrollToFocusedLine(lineIndex);
-                      }}
-                      aria-label={`Seek to line at ${formatTime(line.start)}: ${line.words.map((word) => word.text).join(" ")}`}
-                    />
-                    {line.words.map((word, wordIndex) => {
-                      return (
-                        <button
-                          key={`${word.start}-${wordIndex}`}
-                          type="button"
-                          className="lyric-word"
-                          ref={(element) => {
-                            wordRefs.current[lineWordOffsets[lineIndex] + wordIndex] = element;
-                          }}
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            if (event.detail > 0) event.currentTarget.blur();
-                            directScrollLineRef.current = lineIndex;
-                            seekTo(word.start);
-                            scrollToFocusedLine(lineIndex);
-                          }}
-                          aria-label={`Seek to “${word.text}” at ${formatTime(word.start)}`}
-                          title={`Jump to ${formatTime(word.start)}`}
-                          data-timing={word.timing?.length ? "acoustic" : "linear"}
-                        >
-                          <span className="lyric-word-label">{word.text}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
+              <LyricsLines
+                lines={lines}
+                lineWordOffsets={lineWordOffsets}
+                lineRefs={lineRefs}
+                wordRefs={wordRefs}
+                directScrollLineRef={directScrollLineRef}
+                onSeek={seekTo}
+                onScrollToLine={scrollToFocusedLine}
+              />
             ) : stage === "uploading" ? (
               <div className="holding-lyrics processing-lyrics">
                 <p>Passing the song</p>
@@ -1265,7 +1396,7 @@ export default function Home() {
         </div>
 
         <div className="player-tools">
-          <div className="source-switch" aria-label="Playback source">
+          <div className="source-switch" role="group" aria-label="Playback source">
             <button
               type="button"
               className={playbackMode === "mix" ? "is-active" : ""}
@@ -1310,7 +1441,6 @@ export default function Home() {
         accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.webm"
         onChange={handleFileInput}
       />
-      {/* Live, word-timed lyrics are rendered in the adjacent lyrics panel. */}
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <audio
         ref={audioRef}
