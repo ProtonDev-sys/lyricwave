@@ -33,33 +33,23 @@ const children = [
 ];
 
 let stopping = false;
-function stop(exitCode = 0) {
+async function stop(exitCode = 0) {
   if (stopping) return;
   stopping = true;
-  children.forEach(terminateProcessTree);
-  const fallback = setTimeout(() => process.exit(exitCode), 1_500);
-  fallback.unref();
-  Promise.all(
-    children.map(
-      (child) =>
-        new Promise((resolve) => {
-          if (child.exitCode !== null || child.signalCode !== null) resolve();
-          else child.once("exit", resolve);
-        }),
-    ),
-  ).finally(() => process.exit(exitCode));
+  await Promise.allSettled(children.map((child) => terminateProcessTree(child)));
+  process.exit(exitCode);
 }
 
 for (const child of children) {
   child.on("error", (error) => {
     console.error(error);
-    stop(1);
+    void stop(1);
   });
   child.on("exit", (code, signal) => {
-    if (!stopping && code !== null) stop(code);
-    if (!stopping && signal) stop(1);
+    if (stopping) return;
+    void stop(code ?? (signal ? 1 : 0));
   });
 }
 
-process.on("SIGINT", () => stop(0));
-process.on("SIGTERM", () => stop(0));
+process.on("SIGINT", () => void stop(0));
+process.on("SIGTERM", () => void stop(0));
