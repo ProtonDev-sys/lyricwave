@@ -22,20 +22,20 @@ const child = spawn(python, process.argv.slice(2), {
 });
 
 let stopping = false;
-function stop(signal = "SIGTERM") {
+async function stop(exitCode) {
   if (stopping) return;
   stopping = true;
-  terminateProcessTree(child);
-  if (signal === "SIGINT") process.exitCode = 130;
+  await terminateProcessTree(child);
+  process.exit(exitCode);
 }
 
 child.on("error", (error) => {
   console.error(error);
-  process.exitCode = 1;
+  void stop(1);
 });
 child.on("exit", (code, signal) => {
-  if (code !== null) process.exit(code);
-  process.exit(signal ? 1 : 0);
+  if (stopping) return;
+  process.exit(code ?? (signal ? 1 : 0));
 });
-process.on("SIGINT", () => stop("SIGINT"));
-process.on("SIGTERM", () => stop("SIGTERM"));
+process.on("SIGINT", () => void stop(130));
+process.on("SIGTERM", () => void stop(143));
