@@ -27,8 +27,9 @@ Each transcription runs in a disposable, below-normal-priority GPU worker with a
 configurable VRAM cap. Model workers start in an isolated Windows process tree or POSIX
 session, so cancellation terminates their Demucs, FFmpeg, and inference descendants as
 well as the parent. When a job finishes or is cancelled, the operating system reclaims
-its model RAM and CUDA allocations instead of retaining them in the API server. Completed jobs can be restored from `.local-data` after an
-engine restart, including their isolated-vocal playback URL.
+its model RAM and CUDA allocations instead of retaining them in the API server.
+Completed jobs can be restored from `.local-data` after an engine restart, including
+their isolated-vocal playback URL.
 
 ## Run locally
 
@@ -104,9 +105,9 @@ npm run dev
 Custom transcription checkpoints must be compatible with Transformers'
 `AutoModelForSpeechSeq2Seq` Whisper timestamp path. Custom aligners must expose a
 Wav2Vec2-compatible CTC alphabet containing English letters and a word delimiter.
-`LYRICWAVE_VRAM_FRACTION` is clamped to the range `0.20`–`0.95`. Queue
-capacity is clamped to 1–16 jobs, retention to 1–720 hours, and cleanup
-frequency to 30–21,600 seconds.
+`LYRICWAVE_VRAM_FRACTION` is clamped to the range `0.20`–`0.95`. Queue capacity is
+clamped to 1–16 jobs, retention to 1–720 hours, and cleanup frequency to
+30–21,600 seconds.
 
 The setup scripts also accept `LYRICWAVE_TORCH_VERSION` and
 `LYRICWAVE_TORCH_INDEX_URL`, allowing the CUDA wheel to be updated independently of
@@ -120,26 +121,54 @@ caches. Local jobs stay under the ignored `.local-data` directory and expire aft
 hours by default. Expired terminal jobs are pruned from memory and disk during engine
 startup and later API activity, so a long-running engine does not accumulate stale data.
 
-The raw upload body is bounded before multipart parsing: declared oversized requests are
-rejected without reading them, and streamed or misleading requests are stopped once their actual
-bytes exceed the multipart allowance. The single-GPU queue is also reserved in middleware before
-FastAPI parses or spools multipart upload data. By default it accepts two pending items in total—uploads, queued jobs, and
-active jobs—and returns HTTP 429 with `Retry-After` when full. Cancelling a job that has
-not reached the GPU removes its executor future immediately, so stopped tracks cannot
-remain ahead of later work. If an upload response arrives after the interface has already
-switched tracks, that exact superseded job is cancelled instead of becoming hidden queue work.
-This prevents multiple browser tabs or clients from building an unbounded backlog of large
-local files.
+The raw upload body is bounded before multipart parsing. Declared oversized requests
+are rejected without reading them, and streamed or misleading requests are stopped once
+their actual bytes exceed the multipart allowance. The single-GPU queue is also
+reserved before FastAPI parses or spools multipart data. By default it accepts two
+pending items in total—uploads, queued jobs, and active jobs—and returns HTTP 429 with
+`Retry-After` when full.
+
+Cancelling a job that has not reached the GPU removes its executor future immediately,
+so stopped tracks cannot remain ahead of later work. If an upload response arrives
+after the interface has already switched tracks, that exact superseded job is cancelled
+instead of becoming hidden queue work. This prevents multiple browser tabs or clients
+from building an unbounded backlog of large local files.
 
 The engine validates processing mode, supported language, file extension, decoded
 audio duration, maximum size, and maximum duration before queuing GPU work. Invalid
-uploads are removed immediately. The API is bound to loopback, validates the Host header,
-rejects browser origins outside localhost, and marks responses as non-cacheable. Each
-engine process also creates a random request token. The local interface reads it from the
-health endpoint and supplies it through `X-Lyricwave-Token` for POST and DELETE requests;
-cross-origin pages cannot read the token or submit mutation requests without it. If the engine
-restarts and rotates this token, the interface refreshes health and retries one rejected mutation
-with the new token rather than entering a retry loop.
+uploads are removed immediately. The API is bound to loopback, validates the Host
+header, rejects browser origins outside localhost, and marks responses as non-cacheable.
+Each engine process also creates a random request token. The local interface reads it
+from the health endpoint and supplies it through `X-Lyricwave-Token` for POST and DELETE
+requests; cross-origin pages cannot read the token or submit mutation requests without
+it. If the engine restarts and rotates this token, the interface refreshes health and
+retries one rejected mutation with the new token rather than entering a retry loop.
+
+## Model benchmarking
+
+Use exported word-timing JSON to compare Fast, Accurate, or custom model runs against a
+manually corrected reference from the same track:
+
+```bash
+npm run benchmark:lyrics -- reference.json fast=fast.json accurate=accurate.json
+```
+
+The evaluator reports word error rate, character error rate, substitutions/deletions/
+insertions, exact-word timing coverage, onset and offset error, timing percentiles, and
+signed onset bias. Lead lyrics are measured by default because overlapping ad-libs can
+make sequence metrics ambiguous. Include them explicitly when the reference annotates
+the secondary layer:
+
+```bash
+npm run benchmark:lyrics -- reference.json candidate.json --include-adlibs
+npm run benchmark:lyrics -- reference.json candidate.json --json
+```
+
+Reference and candidate files may use lyricwave's exported `lines` structure or a
+top-level `words` array. Text-only references still produce WER/CER; timing metrics are
+calculated only for exact aligned words where both files contain start and end times.
+This makes model or threshold changes measurable on a representative private corpus
+without committing any songs, lyrics, or generated outputs.
 
 ## Verify
 
