@@ -136,6 +136,49 @@ class ApiBoundaryTest(unittest.TestCase):
             self.assertEqual(metadata["schema"], 2)
             submitted_futures[0].cancel()
 
+    def test_blocking_admission_checks_run_off_the_event_loop(self) -> None:
+        caller_thread = threading.get_ident()
+        runtime_threads: list[int] = []
+        probe_threads: list[int] = []
+        submitted_futures: list[Future[None]] = []
+
+        class FakeExecutor:
+            def submit(self, *args: object) -> Future[None]:
+                future: Future[None] = Future()
+                submitted_futures.append(future)
+                return future
+
+        def runtime_probe() -> dict[str, object]:
+            runtime_threads.append(threading.get_ident())
+            return self._runtime()
+
+        def duration_probe(_: Path) -> float:
+            probe_threads.append(threading.get_ident())
+            return 4.25
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            server, "JOB_ROOT", Path(directory)
+        ), patch.object(
+            server, "_runtime_info", side_effect=runtime_probe
+        ), patch.object(
+            server, "_probe_duration", side_effect=duration_probe
+        ), patch.object(server, "EXECUTOR", FakeExecutor()):
+            upload = UploadFile(
+                filename="track.mp3",
+                file=io.BytesIO(b"audio bytes"),
+            )
+            response = asyncio.run(
+                server.create_job(upload, language="english", quality="fast")
+            )
+
+        self.assertEqual(response["duration"], 4.25)
+        self.assertEqual(len(runtime_threads), 1)
+        self.assertEqual(len(probe_threads), 1)
+        self.assertNotEqual(runtime_threads[0], caller_thread)
+        self.assertNotEqual(probe_threads[0], caller_thread)
+        self.assertEqual(len(submitted_futures), 1)
+        submitted_futures[0].cancel()
+
     def test_job_public_payload_uses_overridden_models(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ,
