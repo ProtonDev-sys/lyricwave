@@ -23,6 +23,7 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend.config import (
@@ -260,6 +261,7 @@ def _worker_environment() -> dict[str, str]:
     )
     return environment
 
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     JOB_LIFECYCLE.cleanup(JOB_ROOT)
@@ -280,7 +282,7 @@ async def create_job(
     quality: str = Form("fast"),
 ) -> dict[str, Any]:
     try:
-        runtime = _runtime_info()
+        runtime = await run_in_threadpool(_runtime_info)
         if not runtime["ready"]:
             raise HTTPException(
                 status_code=503,
@@ -320,7 +322,7 @@ async def create_job(
                     status_code=400,
                     detail="The selected audio file is empty.",
                 )
-            duration = _probe_duration(source_path)
+            duration = await run_in_threadpool(_probe_duration, source_path)
             if duration > MAX_DURATION_SECONDS:
                 raise HTTPException(
                     status_code=413,
