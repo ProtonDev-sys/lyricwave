@@ -52,6 +52,8 @@ test("uses the modular localhost inference engine and word-level results", async
 
   assert.match(page, /http:\/\/127\.0\.0\.1:8008/);
   assert.match(page, /FormData\(\)/);
+  assert.match(page, /X-Lyricwave-Token/);
+  assert.match(page, /request_token/);
   assert.match(page, /URL\.createObjectURL/);
   assert.match(page, /memo\(function LyricsLines/);
   assert.match(page, /findActiveIntervalIndexes/);
@@ -70,6 +72,8 @@ test("uses the modular localhost inference engine and word-level results", async
   assert.doesNotMatch(pipeline, /return_timestamps="word"/);
   assert.match(alignment, /AutoModelForCTC/);
   assert.match(backend, /backend\.inference_worker/);
+  assert.match(backend, /TrustedHostMiddleware/);
+  assert.match(backend, /hmac\.compare_digest/);
   assert.match(inferenceWorker, /set_per_process_memory_fraction\(_vram_fraction\(\)/);
   assert.doesNotMatch(backend, /AutoModelForSpeechSeq2Seq|AutoModelForCTC/);
   assert.doesNotMatch(page, /@browserai|onnxruntime-web|@huggingface\/transformers/);

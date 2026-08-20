@@ -126,8 +126,11 @@ an unbounded backlog of large local files.
 
 The engine validates processing mode, supported language, file extension, decoded
 audio duration, maximum size, and maximum duration before queuing GPU work. Invalid
-uploads are removed immediately. The API is bound to loopback, accepts browser origins
-from localhost only, and marks responses as non-cacheable.
+uploads are removed immediately. The API is bound to loopback, validates the Host header,
+rejects browser origins outside localhost, and marks responses as non-cacheable. Each
+engine process also creates a random request token. The local interface reads it from the
+health endpoint and supplies it through `X-Lyricwave-Token` for POST and DELETE requests;
+cross-origin pages cannot read the token or submit mutation requests without it.
 
 ## Verify
 

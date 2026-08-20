@@ -103,6 +103,9 @@ type BackendHealth = {
   ffprobe?: boolean;
   demucs: boolean;
   transformers: boolean;
+  request_token: string;
+  pending_jobs?: number;
+  queue_capacity?: number;
 };
 
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "flac", "m4a", "aac", "ogg", "webm"];
@@ -112,6 +115,7 @@ const LYRIC_LOOKAHEAD_SECONDS = 0.055;
 const PLAYER_CLOCK_INTERVAL_MS = 100;
 const LOCAL_API_URL =
   process.env.NEXT_PUBLIC_LYRICWAVE_API_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8008";
+const LOCAL_REQUEST_TOKEN_HEADER = "X-Lyricwave-Token";
 
 const languageOptions = [
   { value: "auto", label: "Auto-detect" },
@@ -255,6 +259,7 @@ function uploadToLocalEngine(
   file: File,
   language: string,
   quality: "accurate" | "fast",
+  requestToken: string,
   onProgress: (percent: number) => void,
   register: (request: XMLHttpRequest) => void,
 ) {
@@ -262,6 +267,7 @@ function uploadToLocalEngine(
     const request = new XMLHttpRequest();
     register(request);
     request.open("POST", `${LOCAL_API_URL}/api/jobs`);
+    request.setRequestHeader(LOCAL_REQUEST_TOKEN_HEADER, requestToken);
     request.timeout = 60_000;
     request.responseType = "json";
     request.upload.onprogress = (event) => {
@@ -370,6 +376,7 @@ export default function Home() {
   const fileRef = useRef<File | null>(null);
   const activeJobRef = useRef<string | null>(null);
   const uploadRequestRef = useRef<XMLHttpRequest | null>(null);
+  const requestTokenRef = useRef("");
   const activeWordIndexesRef = useRef<number[]>([]);
   const lastLyricTimeRef = useRef(0);
   const focusedLineIndexRef = useRef(-1);
@@ -565,6 +572,10 @@ export default function Home() {
       });
       if (!response.ok) throw new Error(`Local engine returned ${response.status}`);
       const health = (await response.json()) as BackendHealth;
+      if (!health.request_token) {
+        throw new Error("The local engine did not return a request token.");
+      }
+      requestTokenRef.current = health.request_token;
       setEngineHealth(health);
       setEngineState(health.ready ? "online" : "offline");
       return health.ready;
@@ -586,9 +597,13 @@ export default function Home() {
     const jobId = activeJobRef.current;
     activeJobRef.current = null;
     if (jobId) {
+      const requestToken = requestTokenRef.current;
       void fetch(`${LOCAL_API_URL}/api/jobs/${jobId}`, {
         method: "DELETE",
         keepalive: true,
+        headers: requestToken
+          ? { [LOCAL_REQUEST_TOKEN_HEADER]: requestToken }
+          : undefined,
       }).catch(() => {});
     }
   }, []);
@@ -742,10 +757,16 @@ export default function Home() {
           );
         }
 
+        const requestToken = requestTokenRef.current;
+        if (!requestToken) {
+          throw new Error("The local engine request token is unavailable.");
+        }
+
         const created = await uploadToLocalEngine(
           nextFile,
           language,
           quality,
+          requestToken,
           (uploadProgress) => {
             if (stillCurrent()) setProgress(Math.max(1, uploadProgress));
           },

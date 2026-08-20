@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hmac
 import importlib.util
 import json
 import math
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -18,9 +20,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend.config import (
     ALLOWED_EXTENSIONS,
@@ -77,6 +80,12 @@ EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lyricwave-gpu")
 JOB_LIFECYCLE = JobLifecycle(JOBS, JOBS_LOCK)
 _RUNTIME_CACHE: tuple[float, dict[str, Any]] | None = None
 _RUNTIME_LOCK = threading.RLock()
+REQUEST_TOKEN_HEADER = "X-Lyricwave-Token"
+REQUEST_TOKEN = secrets.token_urlsafe(32)
+_LOCAL_ORIGIN_PATTERN = re.compile(
+    r"https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?"
+)
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _release_models() -> None:
@@ -118,16 +127,45 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=(
+        r"https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?"
+    ),
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", REQUEST_TOKEN_HEADER],
+)
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "127.0.0.1", "[::1]"],
 )
 
 
 @app.middleware("http")
-async def local_security_headers(request: Any, call_next: Any) -> Any:
-    response = await call_next(request)
+async def local_security_headers(request: Request, call_next: Any) -> Any:
+    origin = request.headers.get("origin")
+    if origin and not _LOCAL_ORIGIN_PATTERN.fullmatch(origin):
+        response = JSONResponse(
+            status_code=403,
+            content={
+                "detail": "Use the local lyricwave interface to access this engine."
+            },
+        )
+    elif (
+        request.method in _MUTATING_METHODS
+        and request.url.path.startswith("/api/")
+        and not hmac.compare_digest(
+            request.headers.get(REQUEST_TOKEN_HEADER, ""),
+            REQUEST_TOKEN,
+        )
+    ):
+        response = JSONResponse(
+            status_code=403,
+            content={
+                "detail": "The local engine request token is missing or invalid."
+            },
+        )
+    else:
+        response = await call_next(request)
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -240,6 +278,7 @@ def health() -> dict[str, Any]:
         "service": "lyricwave-local",
         "pending_jobs": JOB_LIFECYCLE.busy_count(),
         "queue_capacity": max_pending_jobs(),
+        "request_token": REQUEST_TOKEN,
         **_runtime_info(),
     }
 
