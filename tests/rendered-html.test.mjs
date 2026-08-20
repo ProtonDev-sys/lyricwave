@@ -32,22 +32,33 @@ test("server-renders the lyricwave workspace", async () => {
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
-test("uses the localhost inference engine and word-level results", async () => {
+test("uses the modular localhost inference engine and word-level results", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const backend = await readFile(new URL("../backend/server.py", import.meta.url), "utf8");
+  const config = await readFile(new URL("../backend/config.py", import.meta.url), "utf8");
+  const pipeline = await readFile(
+    new URL("../backend/inference_pipeline.py", import.meta.url),
+    "utf8",
+  );
+  const alignment = await readFile(
+    new URL("../backend/ctc_alignment.py", import.meta.url),
+    "utf8",
+  );
   const inferenceWorker = await readFile(
     new URL("../backend/inference_worker.py", import.meta.url),
     "utf8",
   );
+
   assert.match(page, /http:\/\/127\.0\.0\.1:8008/);
   assert.match(page, /FormData\(\)/);
   assert.match(page, /URL\.createObjectURL/);
-  assert.match(backend, /htdemucs_ft/);
-  assert.match(backend, /whisper-large-v3/);
-  assert.match(backend, /return_timestamps=True/);
-  assert.doesNotMatch(backend, /return_timestamps="word"/);
-  assert.match(backend, /AutoModelForCTC/);
+  assert.match(config, /htdemucs_ft/);
+  assert.match(config, /whisper-large-v3/);
+  assert.match(pipeline, /return_timestamps=True/);
+  assert.doesNotMatch(pipeline, /return_timestamps="word"/);
+  assert.match(alignment, /AutoModelForCTC/);
   assert.match(backend, /backend\.inference_worker/);
-  assert.match(inferenceWorker, /set_per_process_memory_fraction\(0\.70/);
+  assert.match(inferenceWorker, /set_per_process_memory_fraction\(_vram_fraction\(\)/);
+  assert.doesNotMatch(backend, /AutoModelForSpeechSeq2Seq|AutoModelForCTC/);
   assert.doesNotMatch(page, /@browserai|onnxruntime-web|@huggingface\/transformers/);
 });
