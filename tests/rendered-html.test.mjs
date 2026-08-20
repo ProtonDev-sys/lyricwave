@@ -26,7 +26,8 @@ test("server-renders the lyricwave workspace", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>lyricwave — Your song, word for word<\/title>/i);
-  assert.match(html, /Turn any song into live lyrics/);
+  assert.match(html, /Turn any song into/);
+  assert.match(html, /live lyrics\./);
   assert.match(html, /Checking local engine/);
   assert.match(html, /Drop your song here/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
@@ -34,6 +35,7 @@ test("server-renders the lyricwave workspace", async () => {
 
 test("uses the modular localhost inference engine and word-level results", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const timeline = await readFile(new URL("../app/lyric-timeline.js", import.meta.url), "utf8");
   const localEngine = await readFile(new URL("../app/local-engine.js", import.meta.url), "utf8");
   const backend = await readFile(new URL("../backend/server.py", import.meta.url), "utf8");
@@ -64,6 +66,10 @@ test("uses the modular localhost inference engine and word-level results", async
   assert.match(page, /visibilitychange/);
   assert.match(localEngine, /refreshedToken === activeToken/);
   assert.match(page, /URL\.createObjectURL/);
+  assert.match(page, /file \? "has-track" : "is-empty"/);
+  assert.match(styles, /\.app-shell\.is-empty \.lyrics-stage/);
+  assert.match(styles, /\.intro-copy h1 span/);
+  assert.doesNotMatch(styles, /float-glow|spin-orbit/);
   assert.match(page, /memo\(function LyricsLines/);
   assert.match(page, /findActiveIntervalIndexes/);
   assert.match(page, /RetryablePollingError/);

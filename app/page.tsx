@@ -1152,7 +1152,7 @@ export default function Home() {
   };
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${file ? "has-track" : "is-empty"}`}>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="grain" />
@@ -1202,11 +1202,13 @@ export default function Home() {
           {!file ? (
             <>
               <div className="intro-copy">
-                <span className="eyebrow">PRIVATE KARAOKE ENGINE</span>
-                <h1>Turn any song into live lyrics.</h1>
+                <span className="eyebrow">PRIVATE · LOCAL · YOURS</span>
+                <h1>
+                  Turn any song into <span>live lyrics.</span>
+                </h1>
                 <p>
-                  Drop in a track. Vocal isolation and word-level transcription happen right on
-                  your device.
+                  Drop a track. Lyricwave separates the vocal and syncs every word without
+                  sending the song away from this machine.
                 </p>
               </div>
 
@@ -1228,7 +1230,7 @@ export default function Home() {
                 <strong>{dragging ? "Let it drop" : "Drop your song here"}</strong>
                 <span>MP3, WAV, FLAC, M4A · up to 500 MB</span>
                 <button className="primary-button" type="button" onClick={() => inputRef.current?.click()}>
-                  Choose audio
+                  Choose a song
                 </button>
               </div>
 
@@ -1258,8 +1260,8 @@ export default function Home() {
                 {engineState === "offline"
                   ? "Local engine offline. Run npm run setup:engine once, then npm run dev."
                   : quality === "fast"
-                    ? "Recommended for testing. Accurate mode adds a slower separation and transcription pass."
-                    : "Accurate mode uses the RTX GPU and caches several GB of model files after its first run."}
+                    ? "Fast is the best starting point. Accurate adds a slower second pass."
+                    : "Accurate uses the full local models and keeps downloads cached for later runs."}
               </p>
             </>
           ) : (
@@ -1270,7 +1272,7 @@ export default function Home() {
                   <Waves size={44} strokeWidth={1.3} />
                 </div>
                 <div className="track-heading">
-                  <span className="eyebrow">NOW IN THE ROOM</span>
+                  <span className="eyebrow">NOW PLAYING</span>
                   <h1>{track.title}</h1>
                   <p>{track.artist}</p>
                   <span className="file-meta">
