@@ -12,7 +12,9 @@
     "setup:engine": "powershell -ExecutionPolicy Bypass -File scripts/setup-local.ps1",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs && .venv\\Scripts\\python.exe -m unittest backend.test_server",
+    "test:frontend": "node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs",
+    "test:python": ".venv\\Scripts\\python.exe -m unittest discover -s backend",
+    "test": "npm run build && npm run test:frontend && npm run test:python",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .venv --ignore-pattern .local-data"
   },
   "dependencies": {
