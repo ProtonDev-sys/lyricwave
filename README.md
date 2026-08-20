@@ -24,9 +24,10 @@ The audio file stays on this computer. The first Accurate run downloads several 
 model files; Hugging Face and PyTorch cache them for later runs.
 
 Each transcription runs in a disposable, below-normal-priority GPU worker with a
-configurable VRAM cap. When a job finishes or is cancelled, that process exits so the
-operating system reclaims its model RAM and CUDA allocations instead of retaining
-them in the API server. Completed jobs can be restored from `.local-data` after an
+configurable VRAM cap. Model workers start in an isolated Windows process tree or POSIX
+session, so cancellation terminates their Demucs, FFmpeg, and inference descendants as
+well as the parent. When a job finishes or is cancelled, the operating system reclaims
+its model RAM and CUDA allocations instead of retaining them in the API server. Completed jobs can be restored from `.local-data` after an
 engine restart, including their isolated-vocal playback URL.
 
 ## Run locally
@@ -45,8 +46,8 @@ installer on Linux. Set `LYRICWAVE_PYTHON` when Python 3.12 is not exposed under
 usual launcher name.
 
 Open `http://localhost:3000`. `npm run dev` starts both the interface and the private
-inference API on `http://127.0.0.1:8008`. The launcher terminates both process trees on
-Ctrl+C, including their Windows child processes.
+inference API on `http://127.0.0.1:8008`. The launcher and engine terminate their
+complete process trees on Ctrl+C or job cancellation on both Windows and POSIX systems.
 
 ## Processing modes
 
