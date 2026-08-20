@@ -12,11 +12,12 @@
     "setup:engine": "node scripts/setup-engine.mjs",
     "build": "vinext build",
     "start": "vinext start",
-    "test:frontend": "node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs",
+    "test:frontend": "node --test tests/rendered-html.test.mjs tests/lyric-timing.test.mjs tests/lyric-timeline.test.mjs",
     "test:python": "node scripts/run-python.mjs -m unittest discover -s backend",
     "test": "npm run build && npm run test:frontend && npm run test:python",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .venv --ignore-pattern .local-data",
-    "check": "npm run lint && npm run test"
+    "check": "npm run lint && npm run test",
+    "audit:production": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {
     "lucide-react": "^1.31.0",

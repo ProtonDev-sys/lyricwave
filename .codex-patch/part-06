@@ -1,0 +1,83 @@
+mplete");
++              activeJobRef.current = null;
++              return;
++            }
++            await wait(650);
++          } catch (pollingError) {
++            if (!stillCurrent()) return;
++            if (!isRetryablePollingError(pollingError)) throw pollingError;
++            pollingFailures += 1;
++            const retryDelay = pollingRetryDelay(pollingFailures);
++            setStatus(
++              `Local engine connection interrupted · retrying in ${Math.ceil(
++                retryDelay / 1000,
++              )}s`,
++            );
++            await wait(retryDelay);
+           }
+-          await wait(650);
+         }
+       } catch (processingError) {
+         if (!stillCurrent()) return;
+@@ -722,9 +860,9 @@ export default function Home() {
+       activeWordIndexesRef.current = [];
+       lastLyricTimeRef.current = 0;
+       focusedLineIndexRef.current = -1;
+-      activeLineSignatureRef.current = "";
++      activeLineIndexesRef.current = [];
++      lineRefs.current = [];
+       wordRefs.current = [];
+-      setActiveLineIndexes([]);
+       setFocusedLineIndex(-1);
+       setError("");
+ 
+@@ -781,9 +919,9 @@ export default function Home() {
+     activeWordIndexesRef.current = [];
+     lastLyricTimeRef.current = 0;
+     focusedLineIndexRef.current = -1;
+-    activeLineSignatureRef.current = "";
++    activeLineIndexesRef.current = [];
++    lineRefs.current = [];
+     wordRefs.current = [];
+-    setActiveLineIndexes([]);
+     setFocusedLineIndex(-1);
+     setPlaybackMode("mix");
+     setEngineDetail("");
+@@ -796,19 +934,29 @@ export default function Home() {
+     if (!audio || nextMode === playbackMode) return;
+     const time = audio.currentTime;
+     const shouldResume = !audio.paused;
++    const handleLoadError = () => {
++      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
++      setError("The selected playback source could not be loaded.");
++    };
++    const handleLoadedMetadata = async () => {
++      audio.removeEventListener("error", handleLoadError);
++      audio.currentTime = Math.min(time, audio.duration || time);
++      setCurrentTime(audio.currentTime);
++      syncLyricsAt(audio.currentTime, true);
++      if (shouldResume) {
++        try {
++          await audio.play();
++        } catch {
++          setError("Playback was blocked after switching sources. Press play to continue.");
++        }
++      }
++    };
++
+     audio.pause();
++    audio.addEventListener("loadedmetadata", handleLoadedMetadata, { once: true });
++    audio.addEventListener("error", handleLoadError, { once: true });
+     audio.src = nextMode === "vocals" ? vocalUrl : originalUrl;
+     audio.load();
+-    audio.addEventListener(
+-      "loadedmetadata",
+-      () => {
+-        audio.currentTime = Math.min(time, audio.duration || time);
+-        setCurrentTime(audio.currentTime);
+-        syncLyricsAt(audio.currentTime, true);
+-        if (shouldResume) void audio.play();
+-      },
+-      { once: true },
+-    );
+     setPlaybackMode(

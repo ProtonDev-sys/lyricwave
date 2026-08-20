@@ -1,0 +1,64 @@
+nextMode);
+   };
+ 
+@@ -1022,13 +1170,24 @@ export default function Home() {
+                 </div>
+               </div>
+ 
+-              <div className="pipeline-card" aria-live="polite">
++              <div
++                className="pipeline-card"
++                aria-live="polite"
++                aria-busy={stage !== "complete" && stage !== "error"}
++              >
+                 <div className="pipeline-topline">
+                   <span>{stage === "complete" ? "Ready to play" : stage === "error" ? "Needs attention" : "Making lyrics"}</span>
+                   <strong>{Math.round(progress)}%</strong>
+                 </div>
+-                <div className="progress-track" aria-hidden="true">
+-                  <span style={{ width: `${progress}%` }} />
++                <div
++                  className="progress-track"
++                  role="progressbar"
++                  aria-label="Lyric processing progress"
++                  aria-valuemin={0}
++                  aria-valuemax={100}
++                  aria-valuenow={Math.round(progress)}
++                >
++                  <span aria-hidden="true" style={{ width: `${progress}%` }} />
+                 </div>
+                 <p className="status-copy">{status}</p>
+ 
+@@ -1128,55 +1287,15 @@ export default function Home() {
+             ref={lyricsScrollRef}
+           >
+             {stage === "complete" ? (
+-              <div className="lyrics-lines">
+-                {lines.map((line, lineIndex) => (
+-                  <div
+-                    className={`lyric-line ${(line.kind ?? "lead") === "adlib" ? "is-adlib" : ""} ${activeLineIndexes.includes(lineIndex) ? "is-active" : ""} ${currentTime + LYRIC_LOOKAHEAD_SECONDS > line.end && !activeLineIndexes.includes(lineIndex) ? "is-past" : ""}`}
+-                    key={line.id}
+-                    ref={(element) => {
+-                      lineRefs.current[lineIndex] = element;
+-                    }}
+-                  >
+-                    <button
+-                      className="line-seek-target"
+-                      type="button"
+-                      onMouseDown={(event) => event.preventDefault()}
+-                      onClick={(event) => {
+-                        if (event.detail > 0) event.currentTarget.blur();
+-                        directScrollLineRef.current = lineIndex;
+-                        seekTo(line.start);
+-                        scrollToFocusedLine(lineIndex);
+-                      }}
+-                      aria-label={`Seek to line at ${formatTime(line.start)}: ${line.words.map((word) => word.text).join(" ")}`}
+-                    />
+-                    {line.words.map((word, wordIndex) => {
+-                      return (
+-                        <button
+-                          key={`${word.start}-${wordIndex}`}
+-                          type="button"
+-                          className="lyric-word"
+-                          ref={(element) => {
+-                            wordRefs.curren
