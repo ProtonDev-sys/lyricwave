@@ -1,0 +1,128 @@
+name: Integrate OGG and workbench regression fixes
+
+on:
+  push:
+    branches: [codex/fix-audio-ui-regression]
+    paths:
+      - scripts/apply-audio-regression.py
+      - scripts/apply-ui-regression.py
+      - scripts/finalize-audio-ui-regression.py
+      - .github/workflows/apply-audio-ui-regression.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  integrate:
+    if: ${{ !contains(github.event.head_commit.message, 'Fix OGG decoding and rebuild the workbench') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/fix-audio-ui-regression
+          fetch-depth: 0
+      - name: Preserve integration scripts and reset to current main
+        run: |
+          cp scripts/apply-audio-regression.py /tmp/apply-audio-regression.py
+          cp scripts/apply-ui-regression.py /tmp/apply-ui-regression.py
+          cp scripts/finalize-audio-ui-regression.py /tmp/finalize-audio-ui-regression.py
+          git fetch origin main
+          git reset --hard origin/main
+      - name: Apply validated changes
+        run: |
+          python /tmp/apply-audio-regression.py
+          python /tmp/apply-ui-regression.py
+          python /tmp/finalize-audio-ui-regression.py
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+          cache: npm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements-test.txt
+      - run: npm ci
+      - run: npm run audit:production
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:frontend
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r backend/requirements-test.txt
+      - run: python -m compileall -q backend
+      - run: python -m unittest backend -v
+      - name: Exercise a real OGG/Vorbis decode and audio-only preparation
+        run: |
+          mkdir -p /tmp/lyricwave-media
+          ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=440:duration=2' -c:a libvorbis /tmp/lyricwave-media/input.ogg
+          python - <<'PY'
+          from pathlib import Path
+          import json, subprocess
+          from backend.audio_input import prepare_demucs_input, probe_audio_duration
+          root = Path('/tmp/lyricwave-media')
+          source = root / 'input.ogg'
+          assert 1.9 < probe_audio_duration(source) < 2.1
+          prepared = prepare_demucs_input(source, root)
+          result = subprocess.run(
+              ['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_type,codec_name', '-of', 'json', str(prepared)],
+              capture_output=True, text=True, check=True,
+          )
+          streams = json.loads(result.stdout)['streams']
+          assert streams == [{'codec_name': 'flac', 'codec_type': 'audio'}], streams
+          PY
+      - name: Capture desktop and mobile workbench previews
+        run: |
+          npx -y playwright@1.58.2 install chromium
+          npx vinext start > /tmp/lyricwave-site.log 2>&1 &
+          SITE_PID=$!
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://localhost:3000/ > /dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 90 ]; then
+              cat /tmp/lyricwave-site.log
+              exit 1
+            fi
+            sleep 1
+          done
+          npx -y playwright@1.58.2 screenshot --viewport-size="1440,900" --wait-for-timeout=1500 http://localhost:3000 workbench-desktop.png
+          npx -y playwright@1.58.2 screenshot --viewport-size="390,844" --wait-for-timeout=1500 http://localhost:3000 workbench-mobile.png
+          kill "$SITE_PID" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workbench-preview
+          path: |
+            workbench-desktop.png
+            workbench-mobile.png
+          retention-days: 2
+      - name: Publish the clean integration commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md app/page.tsx app/globals.css backend/server.py backend/audio_input.py backend/test_audio_input.py tests/rendered-html.test.mjs
+          git commit -m "Fix OGG decoding and rebuild the workbench"
+          git push --force-with-lease origin HEAD:codex/fix-audio-ui-regression
+      - name: Update and mark pull request ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > /tmp/pr-body.md <<'EOF'
+          ## Summary
+
+          - fix valid OGG/Vorbis uploads by removing the non-portable ffprobe `-nostdin` argument
+          - select the first audio stream explicitly and return specific decode errors
+          - decode model input to audio-only lossless FLAC so embedded cover art cannot confuse Demucs loaders
+          - replace the promotional interface with a monochrome workbench: input, language, Fast/Best model choice, status, lyrics and playback
+          - default to Auto language and Best quality while keeping Fast one click away
+          - remove slogans, gradients, decorative animation and non-functional copy
+          - add media-path, frontend architecture and regression coverage
+
+          ## Validation
+
+          Production dependency audit, ESLint, TypeScript, production build,  frontend tests, Python compilation, the complete backend suite, a real OGG/Vorbis media preparation check, and desktop/mobile browser renders all passed in the integration workflow. The three user-supplied OGG files were also exercised locally through the real upload boundary and audio-only preparation path.
+          EOF
+          gh pr edit 27 --body-file /tmp/pr-body.md
+          gh pr ready 27
