@@ -35,8 +35,28 @@ jobs:
           content = workflow.read_text(encoding='utf-8')
           marker = "          python - <<'PY'\n"
           terminator = "\n          PY\n"
-          script = content.split(marker, 1)[1].split(terminator, 1)[0]
-          exec(compile(dedent(script), str(workflow), 'exec'))
+          script = dedent(content.split(marker, 1)[1].split(terminator, 1)[0])
+          function_start = script.index('def replace_once(')
+          function_end = script.index('\n\nhelper =', function_start)
+          flexible_replace = '''def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count == 1:
+                  return text.replace(old, new, 1)
+              for width in range(1, 17):
+                  prefix = " " * width
+                  indented_old = "\\n".join(
+                      prefix + line if line else line for line in old.split("\\n")
+                  )
+                  if text.count(indented_old) != 1:
+                      continue
+                  indented_new = "\\n".join(
+                      prefix + line if line else line for line in new.split("\\n")
+                  )
+                  return text.replace(indented_old, indented_new, 1)
+              raise RuntimeError(f"{label}: expected one match, found {count}")
+          '''
+          script = script[:function_start] + dedent(flexible_replace) + script[function_end:]
+          exec(compile(script, str(workflow), 'exec'))
           BOOTSTRAP
           rm -f .github/workflows/bootstrap-engine-restart-recovery.yml
       - run: npm ci
