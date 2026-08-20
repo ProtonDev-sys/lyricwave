@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   reconcile:
-    if: ${{ github.ref == 'refs/heads/codex/model-profiles-clean-ui' && github.actor != 'github-actions[bot]' }}
+    if: ${{ (github.ref == 'refs/heads/codex/model-profiles-clean-ui' || github.head_ref == 'codex/model-profiles-clean-ui') && github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -58,7 +58,7 @@ jobs:
       - run: python -m unittest backend -v
       - name: Remove temporary integration files
         run: |
-          rm scripts/reconcile-model-profiles.py scripts/apply-model-metadata-fixes.py
+          rm -f scripts/reconcile-model-profiles.py scripts/apply-model-metadata-fixes.py
           git checkout origin/main -- .github/workflows/ci.yml
       - name: Commit reconciled and tested tree
         run: |
@@ -69,7 +69,7 @@ jobs:
           git push origin HEAD:codex/model-profiles-clean-ui
 
   frontend:
-    if: ${{ github.ref != 'refs/heads/codex/model-profiles-clean-ui' }}
+    if: ${{ github.ref != 'refs/heads/codex/model-profiles-clean-ui' && github.head_ref != 'codex/model-profiles-clean-ui' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -86,7 +86,7 @@ jobs:
       - run: npm run test:frontend
 
   backend:
-    if: ${{ github.ref != 'refs/heads/codex/model-profiles-clean-ui' }}
+    if: ${{ github.ref != 'refs/heads/codex/model-profiles-clean-ui' && github.head_ref != 'codex/model-profiles-clean-ui' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
