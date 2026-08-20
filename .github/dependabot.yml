@@ -8,7 +8,12 @@ updates:
       day: monday
       time: "06:00"
       timezone: Europe/London
+    versioning-strategy: increase-if-necessary
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
     groups:
       npm-minor-and-patch:
         update-types:
@@ -22,6 +27,7 @@ updates:
       day: monday
       time: "06:15"
       timezone: Europe/London
+    versioning-strategy: increase-if-necessary
     open-pull-requests-limit: 5
     groups:
       python-minor-and-patch:
