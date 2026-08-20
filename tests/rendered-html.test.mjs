@@ -35,6 +35,7 @@ test("server-renders the lyricwave workspace", async () => {
 test("uses the modular localhost inference engine and word-level results", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const timeline = await readFile(new URL("../app/lyric-timeline.js", import.meta.url), "utf8");
+  const localEngine = await readFile(new URL("../app/local-engine.js", import.meta.url), "utf8");
   const backend = await readFile(new URL("../backend/server.py", import.meta.url), "utf8");
   const config = await readFile(new URL("../backend/config.py", import.meta.url), "utf8");
   const pipeline = await readFile(
@@ -54,6 +55,9 @@ test("uses the modular localhost inference engine and word-level results", async
   assert.match(page, /FormData\(\)/);
   assert.match(page, /X-Lyricwave-Token/);
   assert.match(page, /request_token/);
+  assert.match(page, /withRefreshedRequestToken/);
+  assert.match(page, /visibilitychange/);
+  assert.match(localEngine, /refreshedToken === activeToken/);
   assert.match(page, /URL\.createObjectURL/);
   assert.match(page, /memo\(function LyricsLines/);
   assert.match(page, /findActiveIntervalIndexes/);
