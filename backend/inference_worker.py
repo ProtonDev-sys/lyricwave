@@ -6,6 +6,7 @@ import sys
 import traceback
 from pathlib import Path
 
+from backend.config import cpu_thread_count
 from backend.ctc_alignment import release_alignment_model
 from backend.inference_pipeline import transcribe_vocals
 from backend.job_state import JobState, write_json_atomic
@@ -56,8 +57,9 @@ def main() -> int:
     try:
         import torch
 
-        torch.set_num_threads(min(8, max(1, os.cpu_count() or 1)))
-        torch.set_num_interop_threads(2)
+        cpu_threads = cpu_thread_count()
+        torch.set_num_threads(cpu_threads)
+        torch.set_num_interop_threads(min(2, cpu_threads))
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is not available to the inference worker.")
         torch.cuda.set_per_process_memory_fraction(_vram_fraction(), device=0)
