@@ -94,13 +94,18 @@ $env:LYRICWAVE_WHISPER_MODEL = "owner/whisper-compatible-model"
 $env:LYRICWAVE_FAST_WHISPER_MODEL = "owner/fast-whisper-model"
 $env:LYRICWAVE_DEMUCS_MODEL = "custom-demucs-model"
 $env:LYRICWAVE_VRAM_FRACTION = "0.75"
+$env:LYRICWAVE_MAX_PENDING_JOBS = "2"
+$env:LYRICWAVE_JOB_RETENTION_HOURS = "24"
+$env:LYRICWAVE_CLEANUP_INTERVAL_SECONDS = "900"
 npm run dev
 ```
 
 Custom transcription checkpoints must be compatible with Transformers'
 `AutoModelForSpeechSeq2Seq` Whisper timestamp path. Custom aligners must expose a
 Wav2Vec2-compatible CTC alphabet containing English letters and a word delimiter.
-`LYRICWAVE_VRAM_FRACTION` is clamped to the range `0.20`–`0.95`.
+`LYRICWAVE_VRAM_FRACTION` is clamped to the range `0.20`–`0.95`. Queue
+capacity is clamped to 1–16 jobs, retention to 1–720 hours, and cleanup
+frequency to 30–21,600 seconds.
 
 The setup scripts also accept `LYRICWAVE_TORCH_VERSION` and
 `LYRICWAVE_TORCH_INDEX_URL`, allowing the CUDA wheel to be updated independently of
@@ -111,7 +116,13 @@ application code.
 This repository intentionally contains no model weights, songs, separated stems, or
 completed transcription jobs. Model files use the normal Hugging Face and PyTorch
 caches. Local jobs stay under the ignored `.local-data` directory and expire after 24
-hours.
+hours by default. Expired terminal jobs are pruned from memory and disk during engine
+startup and later API activity, so a long-running engine does not accumulate stale data.
+
+The single-GPU queue is bounded before upload bytes are stored. By default it accepts
+two pending items in total—uploads, queued jobs, and active jobs—and returns HTTP 429
+with `Retry-After` when full. This prevents multiple browser tabs or clients from building
+an unbounded backlog of large local files.
 
 The engine validates processing mode, supported language, file extension, decoded
 audio duration, maximum size, and maximum duration before queuing GPU work. Invalid
