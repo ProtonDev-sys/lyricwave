@@ -107,6 +107,7 @@ type BackendHealth = {
 
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "flac", "m4a", "aac", "ogg", "webm"];
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
+const MAX_CONSECUTIVE_POLLING_FAILURES = 6;
 const LYRIC_LOOKAHEAD_SECONDS = 0.055;
 const PLAYER_CLOCK_INTERVAL_MS = 100;
 const LOCAL_API_URL =
@@ -231,6 +232,23 @@ function isRetryablePollingError(error: unknown) {
     (error instanceof DOMException &&
       ["AbortError", "NetworkError", "TimeoutError"].includes(error.name))
   );
+}
+
+async function fetchJobStatus(jobId: string) {
+  const response = await fetch(`${LOCAL_API_URL}/api/jobs/${jobId}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(10_000),
+  });
+  const payload = (await response.json()) as BackendJob | { detail?: string };
+  if (response.status === 408 || response.status === 429 || response.status >= 500) {
+    throw new RetryablePollingError(
+      apiMessage(payload, `The local engine returned ${response.status}.`),
+    );
+  }
+  if (!response.ok) {
+    throw new Error(apiMessage(payload, `The local engine returned ${response.status}.`));
+  }
+  return payload as BackendJob;
 }
 
 function uploadToLocalEngine(
@@ -517,13 +535,7 @@ export default function Home() {
         setFocusedLineIndex(nextFocused);
       }
     },
-    [
-      linePrefixMaxEnds,
-      lineTimeline,
-      lines,
-      wordPrefixMaxEnds,
-      wordTimeline,
-    ],
+    [linePrefixMaxEnds, lineTimeline, lines, wordPrefixMaxEnds, wordTimeline],
   );
 
   const clearObjectUrls = useCallback(() => {
@@ -531,9 +543,6 @@ export default function Home() {
     objectUrlsRef.current = [];
   }, []);
 
-  // Blob URLs are released when a song is replaced or the player is reset.
-  // Revoking them from an unmount cleanup breaks playback during Vite Fast
-  // Refresh because React preserves the File state while remounting effects.
   useEffect(() => {
     fileRef.current = file;
     if (!file || !originalUrl || objectUrlsRef.current.includes(originalUrl)) return;
@@ -688,14 +697,17 @@ export default function Home() {
     }
   }, [originalUrl]);
 
-  const seekTo = useCallback((time: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const nextTime = Math.max(0, Math.min(time, audio.duration || 0));
-    audio.currentTime = nextTime;
-    setCurrentTime(nextTime);
-    syncLyricsAt(nextTime, true);
-  }, [syncLyricsAt]);
+  const seekTo = useCallback(
+    (time: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const nextTime = Math.max(0, Math.min(time, audio.duration || 0));
+      audio.currentTime = nextTime;
+      setCurrentTime(nextTime);
+      syncLyricsAt(nextTime, true);
+    },
+    [syncLyricsAt],
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -747,62 +759,16 @@ export default function Home() {
 
         let pollingFailures = 0;
         while (stillCurrent()) {
+          let job: BackendJob;
           try {
-            const response = await fetch(`${LOCAL_API_URL}/api/jobs/${created.id}`, {
-              cache: "no-store",
-              signal: AbortSignal.timeout(10_000),
-            });
-            const payload = (await response.json()) as BackendJob | { detail?: string };
-            if (response.status === 408 || response.status === 429 || response.status >= 500) {
-              throw new RetryablePollingError(
-                apiMessage(payload, `The local engine returned ${response.status}.`),
-              );
-            }
-            if (!response.ok) {
-              throw new Error(apiMessage(payload, `The local engine returned ${response.status}.`));
-            }
-            const job = payload as BackendJob;
-            if (!stillCurrent()) return;
-            pollingFailures = 0;
-
-            setProgress(job.progress);
-            setStatus(job.status);
-            if (job.duration > 0) setDuration(job.duration);
-            if (job.device) {
-              setEngineDetail(
-                `${job.device} · ${job.separation_model ?? "Demucs"} · ${job.transcription_model ?? "Whisper"}`,
-              );
-            }
-            if (job.vocal_url) setVocalUrl(`${LOCAL_API_URL}${job.vocal_url}`);
-
-            if (job.stage === "queued") setStage("uploading");
-            if (job.stage === "separating") setStage("separating");
-            if (job.stage === "transcribing") setStage("transcribing");
-            if (job.stage === "error") {
-              throw new Error(job.error || "The local model stopped unexpectedly.");
-            }
-            if (job.stage === "cancelled") {
-              activeJobRef.current = null;
-              return;
-            }
-            if (job.stage === "complete") {
-              const timedWords = job.words ?? [];
-              const lyricLines = job.lines?.length ? job.lines : groupIntoLines(timedWords);
-              if (!lyricLines.length) {
-                throw new Error("Whisper did not return any timed lyric lines.");
-              }
-              setLines(lyricLines);
-              setProgress(100);
-              setStatus(`${timedWords.length} words synced locally`);
-              setStage("complete");
-              activeJobRef.current = null;
-              return;
-            }
-            await wait(650);
+            job = await fetchJobStatus(created.id);
           } catch (pollingError) {
             if (!stillCurrent()) return;
             if (!isRetryablePollingError(pollingError)) throw pollingError;
             pollingFailures += 1;
+            if (pollingFailures >= MAX_CONSECUTIVE_POLLING_FAILURES) {
+              throw pollingError;
+            }
             const retryDelay = pollingRetryDelay(pollingFailures);
             setStatus(
               `Local engine connection interrupted · retrying in ${Math.ceil(
@@ -810,7 +776,45 @@ export default function Home() {
               )}s`,
             );
             await wait(retryDelay);
+            continue;
           }
+
+          if (!stillCurrent()) return;
+          pollingFailures = 0;
+          setProgress(job.progress);
+          setStatus(job.status);
+          if (job.duration > 0) setDuration(job.duration);
+          if (job.device) {
+            setEngineDetail(
+              `${job.device} · ${job.separation_model ?? "Demucs"} · ${job.transcription_model ?? "Whisper"}`,
+            );
+          }
+          if (job.vocal_url) setVocalUrl(`${LOCAL_API_URL}${job.vocal_url}`);
+
+          if (job.stage === "queued") setStage("uploading");
+          if (job.stage === "separating") setStage("separating");
+          if (job.stage === "transcribing") setStage("transcribing");
+          if (job.stage === "error") {
+            throw new Error(job.error || "The local model stopped unexpectedly.");
+          }
+          if (job.stage === "cancelled") {
+            activeJobRef.current = null;
+            return;
+          }
+          if (job.stage === "complete") {
+            const timedWords = job.words ?? [];
+            const lyricLines = job.lines?.length ? job.lines : groupIntoLines(timedWords);
+            if (!lyricLines.length) {
+              throw new Error("Whisper did not return any timed lyric lines.");
+            }
+            setLines(lyricLines);
+            setProgress(100);
+            setStatus(`${timedWords.length} words synced locally`);
+            setStage("complete");
+            activeJobRef.current = null;
+            return;
+          }
+          await wait(650);
         }
       } catch (processingError) {
         if (!stillCurrent()) return;
@@ -932,14 +936,12 @@ export default function Home() {
     if (nextMode === "vocals" && !vocalUrl) return;
     const audio = audioRef.current;
     if (!audio || nextMode === playbackMode) return;
+    const previousMode = playbackMode;
+    const previousUrl = previousMode === "vocals" ? vocalUrl : originalUrl;
     const time = audio.currentTime;
     const shouldResume = !audio.paused;
-    const handleLoadError = () => {
-      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
-      setError("The selected playback source could not be loaded.");
-    };
-    const handleLoadedMetadata = async () => {
-      audio.removeEventListener("error", handleLoadError);
+
+    const restorePositionAndPlayback = async () => {
       audio.currentTime = Math.min(time, audio.duration || time);
       setCurrentTime(audio.currentTime);
       syncLyricsAt(audio.currentTime, true);
@@ -950,6 +952,20 @@ export default function Home() {
           setError("Playback was blocked after switching sources. Press play to continue.");
         }
       }
+    };
+    const handleLoadError = () => {
+      audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      setPlaybackMode(previousMode);
+      setError("The selected playback source could not be loaded. Restored the previous source.");
+      if (previousUrl) {
+        audio.addEventListener("loadedmetadata", restorePositionAndPlayback, { once: true });
+        audio.src = previousUrl;
+        audio.load();
+      }
+    };
+    const handleLoadedMetadata = async () => {
+      audio.removeEventListener("error", handleLoadError);
+      await restorePositionAndPlayback();
     };
 
     audio.pause();
@@ -1233,11 +1249,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {engineDetail && (
-                  <p className="engine-detail">
-                    {engineDetail}
-                  </p>
-                )}
+                {engineDetail && <p className="engine-detail">{engineDetail}</p>}
                 {stage === "error" && (
                   <div className="error-card">
                     <p>{error}</p>
@@ -1429,7 +1441,6 @@ export default function Home() {
         accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.webm"
         onChange={handleFileInput}
       />
-      {/* Live, word-timed lyrics are rendered in the adjacent lyrics panel. */}
       {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
       <audio
         ref={audioRef}
