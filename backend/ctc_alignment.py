@@ -259,6 +259,7 @@ def _align_words_ctc(
                 "start": round(word_start, 3),
                 "end": round(word_end, 3),
                 "_timing": timing,
+                "_timing_source": "ctc",
                 "_confidence": round(confidence, 4),
                 "_kind": str(word.get("_kind", "lead")),
                 "_explicit_adlib": bool(word.get("_explicit_adlib", False)),

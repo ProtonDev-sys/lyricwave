@@ -26,7 +26,10 @@ test("server-renders the lyricwave workspace", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>lyricwave — local word-timed lyrics<\/title>/i);
-  assert.match(html, /Word-timed lyrics/);
+  assert.match(html, /Hear the music/);
+  assert.match(html, /See every word/);
+  assert.match(html, /INTERFACE PREVIEW/);
+  assert.match(html, /Processing profile/);
   assert.match(html, /Checking local engine/);
   assert.match(html, /Drop audio file/);
   assert.doesNotMatch(html, /Turn any song|PRIVATE · LOCAL · YOURS|Let it drop|NOW PLAYING|Making lyrics|LYRICS ROOM/);

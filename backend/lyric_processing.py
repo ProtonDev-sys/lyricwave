@@ -116,7 +116,7 @@ def filter_secondary_adlibs(
 
 
 def polish_word_timings(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Expose audible onsets and remove impossible same-layer overlaps."""
+    """Remove same-layer overlaps without biasing measured acoustic onsets."""
 
     grouped: dict[int, list[dict[str, Any]]] = {}
     for original in words:
@@ -135,9 +135,9 @@ def polish_word_timings(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for phrase in phrases:
         for word in phrase:
             original_start = float(word["start"])
-            word["start"] = round(max(0.0, original_start - 0.055), 3)
+            word["start"] = round(max(0.0, original_start), 3)
             word["end"] = round(
-                max(float(word["start"]) + 0.045, float(word["end"]) + 0.018),
+                max(float(word["start"]) + 0.001, float(word["end"])),
                 3,
             )
         for index in range(1, len(phrase)):
@@ -222,6 +222,8 @@ def deduplicate_words(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "kind": str(word.get("_kind", "lead")),
             "phrase": int(word.get("_segment", -1)),
         }
+        if word.get("_timing_source") in {"qwen", "ctc", "estimated"}:
+            public_word["timing_source"] = word["_timing_source"]
         word_start = float(word["start"])
         word_end = float(word["end"])
         previous_fill = 0.0

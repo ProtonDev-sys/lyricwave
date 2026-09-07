@@ -106,3 +106,13 @@ export async function terminateProcessTree(
   signalProcessTree(child, "SIGKILL", signalOptions);
   await forcedExit;
 }
+
+/** Run npm's JavaScript entrypoint directly, including paths containing spaces. */
+export function npmInvocation(args, {
+  npmExecPath = process.env.npm_execpath,
+  nodePath = process.execPath,
+  platform = process.platform,
+} = {}) {
+  if (npmExecPath) return { command: nodePath, args: [npmExecPath, ...args], shell: false };
+  return { command: platform === "win32" ? "npm.cmd" : "npm", args, shell: platform === "win32" };
+}

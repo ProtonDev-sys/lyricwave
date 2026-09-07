@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { requireVenvPython, terminateProcessTree } from "./local-runtime.mjs";
+import { npmInvocation, requireVenvPython, terminateProcessTree } from "./local-runtime.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let python;
@@ -14,7 +14,7 @@ try {
   process.exit(1);
 }
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npm = npmInvocation(["run", "dev:site"]);
 const spawnOptions = {
   cwd: root,
   stdio: "inherit",
@@ -29,7 +29,7 @@ const children = [
       env: { ...process.env, PYTHONUNBUFFERED: "1" },
     },
   ),
-  spawn(npm, ["run", "dev:site"], spawnOptions),
+  spawn(npm.command, npm.args, { ...spawnOptions, shell: npm.shell }),
 ];
 
 let stopping = false;
