@@ -117,3 +117,14 @@ test("an already exited child is not signalled", async () => {
   assert.equal(calls, 0);
   assert.deepEqual(child.directSignals, []);
 });
+
+test("Windows launches npm through Node, preserving paths with spaces", async () => {
+  const { npmInvocation } = await import("../scripts/local-runtime.mjs");
+  assert.deepEqual(npmInvocation(["run", "dev:site"], {
+    platform: "win32", nodePath: "C:\\Program Files\\nodejs\\node.exe", npmExecPath: "C:\\Program Files\\nodejs\\npm-cli.js",
+  }), {
+    command: "C:\\Program Files\\nodejs\\node.exe", args: ["C:\\Program Files\\nodejs\\npm-cli.js", "run", "dev:site"], shell: false,
+  });
+  assert.equal(npmInvocation(["--version"], { platform: "win32", npmExecPath: "" }).shell, true);
+  assert.equal(npmInvocation(["--version"], { platform: "linux", npmExecPath: "" }).shell, false);
+});

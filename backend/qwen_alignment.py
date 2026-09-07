@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import math
 import re
 import threading
 import unicodedata
@@ -116,51 +117,83 @@ def _normalise_word(value: object) -> str:
 def timestamps_to_words(
     raw_words: list[dict[str, Any]],
     timestamp_items: list[dict[str, Any]],
+    audio_duration: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Preserve display tokens when possible and otherwise use aligner segmentation."""
+    """Validate the entire alignment before associating text with timestamps.
 
+    Token counts alone do not establish correspondence. Require lossless text
+    coverage, finite ordered intervals, and crop-local bounds. Re-tokenization
+    (notably CJK) is allowed, but metadata follows the actual source characters.
+    Returning [] deliberately invokes the pipeline's phrase/CTC fallback.
+    """
     if not raw_words or not timestamp_items:
         return []
-    exact_count = len(raw_words) == len(timestamp_items)
-    fallback_template = raw_words[0]
-    aligned: list[dict[str, Any]] = []
-    for index, item in enumerate(timestamp_items):
-        start = float(item.get("start_time", 0.0))
-        end = float(item.get("end_time", start))
-        if end <= start:
-            continue
-        template = raw_words[index] if exact_count else fallback_template
-        item_text = str(item.get("text", "")).strip()
-        display_text = str(template.get("text", "")).strip() if exact_count else item_text
-        if not display_text:
-            continue
-        word = dict(template)
-        word.update(
-            {
-                "text": display_text,
-                "start": start,
-                "end": end,
-                "_confidence": 1.0,
-            }
-        )
-        aligned.append(word)
-
-    if exact_count:
-        return aligned
-
-    source_text = _normalise_word(
-        "".join(str(word.get("text", "")) for word in raw_words)
-    )
-    aligned_text = _normalise_word(
-        "".join(str(word.get("text", "")) for word in aligned)
-    )
+    source_tokens = [_normalise_word(word.get("text", "")) for word in raw_words]
+    target_tokens = [_normalise_word(item.get("text", "")) for item in timestamp_items]
     if (
-        source_text
-        and aligned_text
-        and source_text not in aligned_text
-        and aligned_text not in source_text
+        not all(source_tokens)
+        or not all(target_tokens)
+        or "".join(source_tokens) != "".join(target_tokens)
     ):
         return []
+    if audio_duration is not None and (
+        not math.isfinite(audio_duration) or audio_duration <= 0
+    ):
+        return []
+
+    intervals: list[tuple[float, float]] = []
+    for item in timestamp_items:
+        try:
+            start = float(item["start_time"])
+            end = float(item["end_time"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return []
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+            return []
+        if intervals and (start < intervals[-1][0] or end < intervals[-1][1]):
+            return []
+        if audio_duration is not None and end > audio_duration + 0.02:
+            return []
+        if audio_duration is not None:
+            end = min(end, audio_duration)
+            if end <= start:
+                return []
+        intervals.append((start, end))
+
+    exact_tokens = source_tokens == target_tokens
+    source_ends: list[int] = []
+    position = 0
+    for token in source_tokens:
+        position += len(token)
+        source_ends.append(position)
+    aligned: list[dict[str, Any]] = []
+    source_index = 0
+    position = 0
+    for index, (item, token, interval) in enumerate(zip(timestamp_items, target_tokens, intervals)):
+        while source_index + 1 < len(source_ends) and position >= source_ends[source_index]:
+            source_index += 1
+        template = raw_words[source_index]
+        # A merged token must not inherit a lead/ad-lib label from only one half.
+        last_source = source_index
+        while last_source + 1 < len(source_ends) and position + len(token) > source_ends[last_source]:
+            last_source += 1
+        if any(
+            word.get("_kind", "lead") != template.get("_kind", "lead")
+            for word in raw_words[source_index:last_source + 1]
+        ):
+            return []
+        word = dict(raw_words[index] if exact_tokens else template)
+        word.pop("_timing", None)
+        word.update(
+            text=str(raw_words[index]["text"] if exact_tokens else item["text"]).strip(),
+            start=interval[0],
+            end=interval[1],
+            # Structural acceptance score, not a calibrated ASR probability.
+            _confidence=1.0,
+            _timing_source="qwen",
+        )
+        aligned.append(word)
+        position += len(token)
     return aligned
 
 
@@ -197,4 +230,4 @@ def align_words_qwen(
         timestamp_token_id=model.config.timestamp_token_id,
     )
     items = timestamp_batches[0] if timestamp_batches else []
-    return timestamps_to_words(raw_words, list(items))
+    return timestamps_to_words(raw_words, list(items), audio.size / 16_000)

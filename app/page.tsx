@@ -46,6 +46,8 @@ import {
 } from "./local-engine.js";
 import { buildTimingExport } from "./lyric-export.js";
 import { wordFillAt } from "./lyric-timing.js";
+import { buildLrc, lyricClockTime, parseTrackName } from "./player-utils.js";
+import { QualityPicker, SignalMeter, StudioFeatures, StudioPreview } from "./studio-ui";
 type QualityPreset = "fast" | "balanced" | "accurate";
 
 type ProcessingStage =
@@ -67,6 +69,7 @@ type TimedWord = {
     pause_before?: boolean;
   }>;
   kind?: "lead" | "adlib";
+  timing_source?: "qwen" | "ctc" | "estimated";
   phrase?: number;
 };
 
@@ -151,7 +154,6 @@ type BackendHealth = {
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "flac", "m4a", "aac", "ogg", "webm"];
 const MAX_FILE_SIZE = 500 * 1024 * 1024;
 const MAX_CONSECUTIVE_POLLING_FAILURES = 6;
-const LYRIC_LOOKAHEAD_SECONDS = 0.055;
 const PLAYER_CLOCK_INTERVAL_MS = 100;
 const LOCAL_API_URL =
   process.env.NEXT_PUBLIC_LYRICWAVE_API_URL?.replace(/\/$/, "") ?? "http://127.0.0.1:8008";
@@ -213,15 +215,6 @@ function formatTime(value: number) {
 function formatFileSize(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(bytes > 10 * 1024 * 1024 ? 0 : 1)} MB`;
-}
-
-function parseTrackName(fileName: string) {
-  const clean = fileName.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").trim();
-  const pieces = clean.split(/\s+-\s+/);
-  if (pieces.length > 1) {
-    return { title: pieces[0], artist: pieces.slice(1).join(" — ") };
-  }
-  return { artist: "Local audio", title: clean || "Untitled track" };
 }
 
 function isAudioFile(file: File) {
@@ -523,6 +516,9 @@ export default function Home() {
     null,
   );
   const [focusedLineIndex, setFocusedLineIndex] = useState(-1);
+  const [timingOffsetMs, setTimingOffsetMs] = useState(0);
+  const [followLyrics, setFollowLyrics] = useState(true);
+  const [playbackRate, setPlaybackRate] = useState(1);
 
   const modelProfiles =
     engineHealth?.model_profiles?.length
@@ -569,7 +565,7 @@ export default function Home() {
 
   const syncLyricsAt = useCallback(
     (audioTime: number, force = false) => {
-      const displayTime = Math.max(0, audioTime + LYRIC_LOOKAHEAD_SECONDS);
+      const displayTime = lyricClockTime(audioTime, timingOffsetMs);
       const jumped = force || Math.abs(displayTime - lastLyricTimeRef.current) > 0.5;
       const candidate = findLastStartedIndex(wordTimeline, displayTime);
       const nextActive = findActiveIntervalIndexes(
@@ -665,7 +661,7 @@ export default function Home() {
         setFocusedLineIndex(nextFocused);
       }
     },
-    [linePrefixMaxEnds, lineTimeline, lines, wordPrefixMaxEnds, wordTimeline],
+    [linePrefixMaxEnds, lineTimeline, lines, timingOffsetMs, wordPrefixMaxEnds, wordTimeline],
   );
 
   const clearObjectUrls = useCallback(() => {
@@ -802,20 +798,21 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (focusedLineIndex < 0) return;
+    if (focusedLineIndex < 0 || !followLyrics) return;
     if (directScrollLineRef.current === focusedLineIndex) {
       directScrollLineRef.current = null;
       return;
     }
     directScrollLineRef.current = null;
     scrollToFocusedLine(focusedLineIndex);
-  }, [focusedLineIndex, scrollToFocusedLine]);
+  }, [focusedLineIndex, followLyrics, scrollToFocusedLine]);
 
   useEffect(() => {
     const container = lyricsScrollRef.current;
     if (!container) return;
     const stopTrackingAnimation = () => {
       container.scrollTo({ top: container.scrollTop, behavior: "auto" });
+      setFollowLyrics(false);
     };
     container.addEventListener("wheel", stopTrackingAnimation, { passive: true });
     container.addEventListener("touchstart", stopTrackingAnimation, { passive: true });
@@ -858,13 +855,15 @@ export default function Home() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, select, textarea, button")) return;
+      if (event.altKey || event.ctrlKey || event.metaKey || target?.closest("input, select, textarea, button, [contenteditable=true]")) return;
       if (event.code === "Space") {
         event.preventDefault();
         void togglePlayback();
       }
-      if (event.code === "ArrowLeft") seekTo(currentTime - 5);
-      if (event.code === "ArrowRight") seekTo(currentTime + 5);
+      if (event.code === "ArrowLeft" || event.code === "ArrowRight") {
+        event.preventDefault();
+        seekTo((audioRef.current?.currentTime ?? 0) + (event.code === "ArrowLeft" ? -5 : 5));
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -1040,6 +1039,8 @@ export default function Home() {
       const parsed = parseTrackName(nextFile.name);
       fileRef.current = nextFile;
       setFile(nextFile);
+      setTimingOffsetMs(0);
+      setFollowLyrics(true);
       setTrack(parsed);
       setOriginalUrl(nextOriginalUrl);
       setVocalUrl("");
@@ -1064,6 +1065,11 @@ export default function Home() {
       void processTrack(nextFile, runId);
     },
     [cancelCurrentJob, clearObjectUrls, processTrack],
+  );
+
+  const seekToLyric = useCallback(
+    (time: number) => seekTo(time + timingOffsetMs / 1000),
+    [seekTo, timingOffsetMs],
   );
 
   const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
@@ -1097,6 +1103,8 @@ export default function Home() {
     clearObjectUrls();
     fileRef.current = null;
     setFile(null);
+    setTimingOffsetMs(0);
+    setFollowLyrics(true);
     setTrack({ title: "No audio selected", artist: "Local file" });
     setStage("idle");
     setStatus("Ready");
@@ -1200,6 +1208,7 @@ export default function Home() {
         artist: track.artist,
         duration,
         processing: processingMetadata,
+        playbackOffsetMs: timingOffsetMs,
         lines,
       });
       downloadBlob(
@@ -1208,15 +1217,7 @@ export default function Home() {
       );
       return;
     }
-    const lrc = lines
-      .map((line) => {
-        const minutes = Math.floor(line.start / 60)
-          .toString()
-          .padStart(2, "0");
-        const seconds = (line.start % 60).toFixed(2).padStart(5, "0");
-        return `[${minutes}:${seconds}]${line.words.map((word) => word.text).join(" ")}`;
-      })
-      .join("\n");
+    const lrc = buildLrc(lines, timingOffsetMs);
     downloadBlob(new Blob([lrc], { type: "text/plain" }), `${safeTitle || "lyrics"}.lrc`);
   };
 
@@ -1248,6 +1249,7 @@ export default function Home() {
 
   return (
     <main className={`app-shell ${file ? "has-track" : "is-empty"}`}>
+      <a className="skip-link" href="#lyrics">Skip to lyrics</a>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div className="grain" />
@@ -1259,8 +1261,9 @@ export default function Home() {
               <i key={`${height}-${index}`} style={{ height }} />
             ))}
           </span>
-          <span>lyricwave</span>
+          <span>lyricwave<span className="brand-period">.</span></span>
         </button>
+        <span className="header-descriptor">A PERSONAL LYRIC STUDIO</span>
         <div className="header-actions">
           <button
             className={`privacy-pill engine-${engineState}`}
@@ -1282,6 +1285,7 @@ export default function Home() {
                 Audio is sent only to 127.0.0.1. Models run on
                 {engineHealth?.device ? ` ${engineHealth.device}` : " this computer"}.
               </span>
+              <button type="button" className="engine-recheck" onClick={() => void checkEngine()}>Check engine again</button>
             </div>
           )}
           {file && (
@@ -1297,9 +1301,9 @@ export default function Home() {
           {!file ? (
             <>
               <div className="intro-copy">
-                <span className="eyebrow">LOCAL GPU TRANSCRIPTION</span>
-                <h1>Word-timed lyrics</h1>
-                <p>Select an audio file. Processing runs on this computer.</p>
+                <span className="eyebrow"><span className="eyebrow-dot" /> YOUR MUSIC. IN FOCUS.</span>
+                <h1>Hear the music.<br /><span>See every word.</span></h1>
+                <p>Turn the songs you love into word-timed lyrics.<br className="desktop-break" /> Just your audio, your computer, and a closer listen.</p>
               </div>
 
               <div
@@ -1320,7 +1324,7 @@ export default function Home() {
                 <strong>{dragging ? "Release to select" : "Drop audio file"}</strong>
                 <span>MP3, WAV, FLAC, M4A, AAC, OGG, WebM · up to 500 MB</span>
                 <button className="primary-button" type="button" onClick={() => inputRef.current?.click()}>
-                  Choose audio
+                  Choose audio <span aria-hidden="true">↗</span>
                 </button>
               </div>
 
@@ -1335,19 +1339,8 @@ export default function Home() {
                 </select>
               </label>
 
-              <label className="language-control mode-control">
-                <span>Model profile</span>
-                <select
-                  value={quality}
-                  onChange={(event) => setQuality(event.target.value as QualityPreset)}
-                >
-                  {modelProfiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <QualityPicker profiles={modelProfiles} value={quality} onChange={setQuality} />
+              <StudioFeatures />
 
               <p className="model-note">
                 {engineState === "offline"
@@ -1363,7 +1356,7 @@ export default function Home() {
                   <Waves size={44} strokeWidth={1.3} />
                 </div>
                 <div className="track-heading">
-                  <span className="eyebrow">SELECTED FILE</span>
+                  <span className="eyebrow">ON YOUR RECORD</span>
                   <h1>{track.title}</h1>
                   <p>{track.artist}</p>
                   <span className="file-meta">
@@ -1464,11 +1457,11 @@ export default function Home() {
           )}
         </aside>
 
-        <section className="lyrics-stage" ref={lyricsRef} aria-label="Lyrics">
+        <section id="lyrics" className="lyrics-stage" ref={lyricsRef} aria-label="Lyrics">
           <div className="lyrics-toolbar">
             <div className="lyrics-status">
               <span className={`live-dot ${isPlaying ? "is-live" : ""}`} />
-              <span>LYRICS</span>
+              <span>{file ? "LIVE LYRICS" : "THE LISTENING ROOM"}</span>
               {stage === "complete" && (
                 <span className="lyrics-meta">
                   {wordTimeline.length} words · {lines.length} lines
@@ -1480,6 +1473,27 @@ export default function Home() {
             </button>
           </div>
 
+          {file && (
+            <div className="lyrics-controls">
+              <button type="button" className={`follow-button ${followLyrics ? "is-on" : ""}`} aria-pressed={followLyrics} onClick={() => setFollowLyrics((value) => !value)}>
+                <AudioLines size={14} /> {followLyrics ? "Auto-follow on" : "Resume auto-follow"}
+              </button>
+              <label className="timing-control" title="Positive values delay the lyrics. Negative values bring them forward.">
+                <span>Timing offset</span>
+                <input type="number" min={-2000} max={2000} step={50} value={timingOffsetMs} onChange={(event) => setTimingOffsetMs(Math.max(-2000, Math.min(2000, Number(event.target.value) || 0)))} aria-label="Lyric timing offset in milliseconds" />
+                <span>ms</span>
+              </label>
+              <label className="speed-control"><span>Speed</span>
+                <select aria-label="Playback speed" value={playbackRate} onChange={(event) => {
+                  const rate = Number(event.target.value);
+                  setPlaybackRate(rate);
+                  if (audioRef.current) audioRef.current.playbackRate = rate;
+                }}>
+                  {[0.5, 0.75, 1, 1.25, 1.5].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
+                </select>
+              </label>
+            </div>
+          )}
           <div
             className={`lyrics-scroll ${stage === "complete" ? "has-lyrics" : ""}`}
             ref={lyricsScrollRef}
@@ -1491,21 +1505,24 @@ export default function Home() {
                 lineRefs={lineRefs}
                 wordRefs={wordRefs}
                 directScrollLineRef={directScrollLineRef}
-                onSeek={seekTo}
+                onSeek={seekToLyric}
                 onScrollToLine={scrollToFocusedLine}
               />
             ) : stage === "uploading" ? (
               <div className="holding-lyrics processing-lyrics">
+                <SignalMeter />
                 <p>Uploading audio</p>
                 <span>{status}</span>
               </div>
             ) : stage === "separating" ? (
               <div className="holding-lyrics processing-lyrics">
+                <SignalMeter />
                 <p>Separating vocals</p>
                 <span>{status}</span>
               </div>
             ) : stage === "transcribing" ? (
               <div className="holding-lyrics processing-lyrics">
+                <SignalMeter />
                 <p>Transcribing and aligning</p>
                 <span>{status}</span>
               </div>
@@ -1515,10 +1532,7 @@ export default function Home() {
                 <span>{error || "Retry or select another file."}</span>
               </div>
             ) : (
-              <div className="holding-lyrics">
-                <p>No lyrics loaded</p>
-                <span>Select an audio file to begin.</span>
-              </div>
+              <StudioPreview />
             )}
           </div>
         </section>
@@ -1608,6 +1622,7 @@ export default function Home() {
         ref={inputRef}
         className="visually-hidden"
         type="file"
+        aria-label="Choose an audio file"
         accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.ogg,.webm"
         onChange={handleFileInput}
       />
@@ -1618,6 +1633,10 @@ export default function Home() {
         onLoadedMetadata={(event) => {
           setDuration(event.currentTarget.duration || 0);
           event.currentTarget.volume = volume;
+          event.currentTarget.playbackRate = playbackRate;
+        }}
+        onError={() => {
+          if (audioRef.current?.getAttribute("src")) setError("This browser could not decode the audio. Try a WAV or MP3 file.");
         }}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}

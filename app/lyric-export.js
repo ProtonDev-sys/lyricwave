@@ -9,6 +9,7 @@ export const LYRIC_TIMING_SCHEMA = "lyricwave.word-timings.v1";
  *   duration: number,
  *   lines: Array<object>,
  *   processing?: object | null,
+ *   playbackOffsetMs?: number,
  *   exportedAt?: string,
  * }} input
  */
@@ -18,6 +19,7 @@ export function buildTimingExport({
   duration,
   lines,
   processing = null,
+  playbackOffsetMs = 0,
   exportedAt = new Date().toISOString(),
 }) {
   return {
@@ -28,6 +30,7 @@ export function buildTimingExport({
     generatedOnDevice: true,
     exportedAt,
     processing,
+    playbackOffsetMs,
     lines,
   };
 }

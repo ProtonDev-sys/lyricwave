@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -126,15 +127,22 @@ def _transcribe_view(
                 continue
 
             timestamp = chunk.get("timestamp")
-            if isinstance(timestamp, (tuple, list)) and len(timestamp) == 2:
-                segment_start = float(timestamp[0] or 0.0)
-                segment_end = float(
-                    timestamp[1] if timestamp[1] is not None else chunk_duration
-                )
-            else:
-                segment_start, segment_end = 0.0, chunk_duration
+            try:
+                if isinstance(timestamp, (tuple, list)) and len(timestamp) == 2:
+                    segment_start = float(timestamp[0] if timestamp[0] is not None else 0.0)
+                    segment_end = float(
+                        timestamp[1] if timestamp[1] is not None else chunk_duration
+                    )
+                else:
+                    segment_start, segment_end = 0.0, chunk_duration
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(segment_start) or not math.isfinite(segment_end):
+                continue
             segment_start = max(0.0, min(chunk_duration, segment_start))
-            segment_end = max(segment_start + 0.04, min(chunk_duration, segment_end))
+            segment_end = min(chunk_duration, segment_end)
+            if segment_end - segment_start < 0.04:
+                continue
 
             crop_start = max(0.0, segment_start - 0.3)
             crop_end = min(chunk_duration, segment_end + 0.3)
@@ -158,6 +166,7 @@ def _transcribe_view(
             raw_words = [
                 {
                     "text": piece,
+                    "_timing_source": "estimated",
                     "start": fallback_timings[word_index][0],
                     "end": fallback_timings[word_index][1],
                     "_kind": (
@@ -262,10 +271,10 @@ def _align_segment_words(
     except Exception as alignment_error:
         print(
             f"[align:{job.id[:8]}] alignment unavailable; "
-            f"using phrase timing: {alignment_error}",
+            f"{'dropping side phrase' if segment['source_layer'] == 'side' else 'using phrase timing'}: {alignment_error}",
             flush=True,
         )
-        return raw_words, 0.0
+        return ([] if segment["source_layer"] == "side" else raw_words), 0.0
 
 
 def transcribe_vocals(job: JobState, vocal_path: Path) -> list[dict[str, Any]]:
@@ -347,8 +356,13 @@ def transcribe_vocals(job: JobState, vocal_path: Path) -> list[dict[str, Any]]:
                 is not None
             )
             needs_alignment = use_qwen_alignment or use_english_alignment
-            local_words = raw_words if not needs_alignment else []
-            segment_confidence = 1.0 if not needs_alignment else 0.0
+            # Unaligned side-channel text is not sufficient evidence of an ad-lib.
+            local_words = (
+                raw_words
+                if not needs_alignment and segment["source_layer"] != "side"
+                else []
+            )
+            segment_confidence = 0.0
 
             if needs_alignment and raw_words:
                 job.update(
@@ -365,18 +379,21 @@ def transcribe_vocals(job: JobState, vocal_path: Path) -> list[dict[str, Any]]:
             for word in local_words:
                 word_start = start_time + float(word["start"])
                 word_end = start_time + float(word["end"])
-                if word_end - word_start > 4.0:
-                    print(
-                        f"[align:{job.id[:8]}] dropped overlong word "
-                        f"{word['text']} ({word_end - word_start:.2f}s)",
-                        flush=True,
-                    )
+                # Held sung notes can legitimately exceed four seconds. Bound
+                # words by their audio crop instead of deleting long lyrics.
+                crop_end = start_time + segment["audio"].size / SAMPLE_RATE
+                if not math.isfinite(word_start) or not math.isfinite(word_end):
+                    continue
+                word_start = max(start_time, word_start)
+                word_end = min(crop_end, word_end)
+                if word_end <= word_start:
                     continue
                 words.append(
                     {
                         "text": str(word["text"]),
                         "start": round(max(0.0, word_start), 3),
-                        "end": round(max(word_start + 0.04, word_end), 3),
+                        "end": round(word_end, 3),
+                        "_timing_source": word.get("_timing_source", "estimated"),
                         "_timing": [
                             {
                                 "start": round(

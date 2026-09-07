@@ -45,7 +45,7 @@ class ProcessControlTest(unittest.TestCase):
 
     def test_completed_process_is_untouched(self) -> None:
         process = FakeProcess(poll_result=0)
-        with patch.object(process_control.os, "killpg") as killpg:
+        with patch.object(process_control.os, "killpg", create=True) as killpg:
             process_control.terminate_process_tree(
                 process,
                 platform_name="posix",
@@ -60,9 +60,10 @@ class ProcessControlTest(unittest.TestCase):
             patch.object(
                 process_control.os,
                 "getpgid",
+                create=True,
                 return_value=process.pid,
             ),
-            patch.object(process_control.os, "killpg") as killpg,
+            patch.object(process_control.os, "killpg", create=True) as killpg,
         ):
             process_control.terminate_process_tree(
                 process,
@@ -72,6 +73,7 @@ class ProcessControlTest(unittest.TestCase):
         process.wait.assert_called_once_with(timeout=10.0)
         process.terminate.assert_not_called()
 
+    @patch.object(process_control.signal, "SIGKILL", 9, create=True)
     def test_posix_timeout_escalates_to_the_process_group(self) -> None:
         process = FakeProcess()
         process.wait.side_effect = [
@@ -82,9 +84,10 @@ class ProcessControlTest(unittest.TestCase):
             patch.object(
                 process_control.os,
                 "getpgid",
+                create=True,
                 return_value=process.pid,
             ),
-            patch.object(process_control.os, "killpg") as killpg,
+            patch.object(process_control.os, "killpg", create=True) as killpg,
         ):
             process_control.terminate_process_tree(
                 process,
@@ -110,9 +113,10 @@ class ProcessControlTest(unittest.TestCase):
             patch.object(
                 process_control.os,
                 "getpgid",
+                create=True,
                 return_value=999,
             ),
-            patch.object(process_control.os, "killpg") as killpg,
+            patch.object(process_control.os, "killpg", create=True) as killpg,
         ):
             process_control.terminate_process_tree(
                 process,

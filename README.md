@@ -159,7 +159,6 @@ without committing any songs, lyrics, or generated outputs.
 
 ```bash
 npm run audit:production
-npm run audit:dev:check
 npm run lint
 npm run typecheck
 npm run build
@@ -172,6 +171,70 @@ npm run check
 itself is a stable discovery target for every `backend/test_*.py` module. The GitHub
 Actions workflow runs the production dependency audit, ESLint, explicit TypeScript
 checking, frontend build/tests, Python bytecode compilation, and the GPU-free backend
-regression suite on each pull request and push to `main`. Model inference begins only
+regression suite on both Ubuntu and Windows on each pull request and push to `main`. Model inference begins only
 after a user selects an audio file; CUDA model downloads and real-track inference
 remain local runtime checks.
+
+## Studio interface and playback calibration
+
+The interface uses a responsive, dark listening-room layout with a clearly labelled
+illustrative preview (not a generated transcript), selectable model cards, an expanded
+lyric reader, visible engine status, and a compact transport. All artwork is CSS/SVG;
+no artwork service or additional runtime dependency is needed. Keyboard focus,
+reduced-motion preferences, high-contrast mode, and mobile vocal/volume controls are
+preserved.
+
+Click a word to seek to it. Space toggles playback and the arrow keys seek five seconds
+when focus is outside an interactive control. Speed ranges from 0.5× to 1.5×. Scrolling
+inside the lyric reader suspends automatic tracking; **Resume auto-follow** restores it
+without scrolling the whole page.
+
+**Timing offset** ranges from −2000 to +2000 milliseconds. Positive values delay the
+lyrics; negative values bring them forward. The default is zero: acoustic onsets no
+longer receive a fixed backend advance plus a second frontend lookahead. Word seeking
+and LRC exports honor the selected offset. JSON retains the original acoustic times
+and records `playbackOffsetMs` separately. A new file resets calibration.
+
+Filename parsing follows the conventional `Artist - Title.ext` form. Without that
+separator, the filename is the title and the artist is labelled `Local audio`; this is
+not an embedded-tag reader.
+
+## Alignment integrity
+
+Qwen alignment results must cover the complete normalized transcript, including when
+token counts happen to match. Missing, extra, reordered, malformed, non-finite,
+backward, or out-of-crop timestamps cause a conservative fallback rather than attaching
+unrelated times to display words. CJK re-tokenization preserves the source vocal-layer
+metadata. Held sung words are bounded by their audio crop, not discarded merely for
+lasting more than four seconds. Unsupported or failed side-channel alignment cannot
+silently become an apparently verified ad-lib.
+
+New word exports optionally identify `timing_source` as `qwen`, `ctc`, or `estimated`.
+Estimated phrase timing remains an approximation, not evidence of acoustic word
+alignment. Structural acceptance scores are not calibrated recognition probabilities.
+These fixes address deterministic failure modes; they do **not** establish a measured
+word-error-rate improvement on songs. Use the private-corpus benchmark above to measure
+model accuracy and timing on representative recordings.
+
+## Browser regression suite
+
+After `npm ci` and `npm run build`, install the optional test tools without changing the
+application dependency lockfile:
+
+```bash
+npm install --no-save --package-lock=false playwright@1.58.2 @axe-core/playwright@4.11.1
+npx playwright install --with-deps chromium firefox webkit
+npm run test:browser
+```
+
+The suite serves the production worker and client bundles through a test-only loopback
+adapter. It uses synthesized WAV audio and mocked local-engine responses: no songs,
+model downloads, GPU, or third-party transcription service are involved. Chromium,
+Firefox, and WebKit exercise responsive layouts, keyboard interactions, uploads,
+playback and source switching, timing calibration, downloads, error/retry/cancellation,
+and engine recovery. Axe checks empty, loaded, and mobile loaded states. CI retains
+screenshots and JSON reports for seven days, separately for Linux and Windows.
+
+Linux/Windows CI validates software behavior and GPU-free regressions. Installing CUDA,
+loading the selected model checkpoints, real-track recognition, and hardware-specific
+codec/GPU behavior still require local integration testing on the target machine.

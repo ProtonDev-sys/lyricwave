@@ -14,10 +14,37 @@ permissions:
 
 jobs:
   frontend:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Archive reproducible review source
+        if: matrix.os == 'ubuntu-24.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-source
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            app/
+            backend/
+            scripts/
+            tests/
+            public/
+            types/
+            build/
+            worker/
+            .openai/
+            *.json
+            *.ts
+            *.mjs
+            README.md
+            .github/workflows/ci.yml
+            .gitignore
       - uses: actions/setup-node@v7
         with:
           node-version: 22.13.0
@@ -28,9 +55,35 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test:frontend
+      - name: Install isolated browser-test tools
+        run: npm install --no-save --package-lock=false playwright@1.58.2 @axe-core/playwright@4.11.1
+      - name: Install browser engines
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Production browser and accessibility checks
+        run: npm run test:browser
+      - name: Browser reports and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-${{ matrix.os }}
+          path: test-results/browser/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Production build for visual review
+        if: matrix.os == 'ubuntu-24.04' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-build
+          path: dist/
+          if-no-files-found: ignore
+          retention-days: 7
 
   backend:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7

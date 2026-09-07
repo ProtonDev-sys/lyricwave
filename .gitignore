@@ -71,3 +71,6 @@ yarn-error.log*
 /outputs/
 /work/
 /public/__local-test-*.ogg
+
+# Synthetic browser reports and screenshots
+test-results/
