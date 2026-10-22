@@ -18,6 +18,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - name: Package source for local regression work
+        if: github.head_ref == 'codex/fix-audio-ui-regression'
+        run: tar --exclude=.git -czf /tmp/lyricwave-source.tgz .
+      - name: Upload source package
+        if: github.head_ref == 'codex/fix-audio-ui-regression'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lyricwave-source
+          path: /tmp/lyricwave-source.tgz
+          retention-days: 1
       - uses: actions/setup-node@v7
         with:
           node-version: 22.13.0
